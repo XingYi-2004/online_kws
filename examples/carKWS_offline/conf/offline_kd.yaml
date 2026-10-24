@@ -1,0 +1,155 @@
+# ============================================================================
+# 离线 SNN 知识蒸馏（MultiTauLIFCommander + TdnnLstm 教师）—— AlphaSNN Lightning 管线
+# ============================================================================
+# 超参数逐项对齐 experiment4（干净测试 98.04%，E224 raw / E253 EMA）：
+#   AdamW lr=2e-3 wd=5e-3（tau/branch 分组内 wd 相同，等价原平铺优化器），
+#   300 epoch，warmup 30 + cosine，EMA 0.9995（验证/测试时应用），
+#   SpikingCE label_smoothing=0.1，branch_balance 0.01，梯度裁剪 5.0，
+#   KD alpha=0.7 T=10.0，SpecAugment 时≤15×1 / 频≤5×1（批级），
+#   DynamicBucketing 1500s / 30 buckets，seed=312。
+# 启动：cd AlphaSNN && conda activate snn
+#   python -m modules.launch cmd=train conf=examples/carKWS_offline/conf/offline_kd.yaml version=kd01
+# 训练后导出（供在线阶段加载）：
+#   python examples/carKWS_offline/local/export_kws.py \
+#       --ckpt exp/logs/carKWS_SNN_KD/kd01/checkpoints/best-acc.ckpt \
+#       --ckpt-ema exp/logs/carKWS_SNN_KD/kd01/checkpoints/best-ema.ckpt
+# ============================================================================
+
+name: carKWS
+version: kd01
+
+system:
+  name: MultiTauKwsKd
+  exp_name: carKWS_SNN_KD
+  debug: false
+  seed: 312
+  log_dir: exp/logs
+  train_and_test: true
+  test_metric: false
+  kd:
+    teacher: kd_teacher/tdnn_ann_29class.pt
+    alpha: 0.7
+    temperature: 10.0
+  spec_augment:            # 训练时批级时频遮罩，评测不增强
+    time_mask: 15
+    freq_mask: 5
+    num_time_masks: 1
+    num_freq_masks: 1
+
+model:
+  name: MultiTauLIFCommander
+  param:
+    n_inputs: 80
+    n_hidden_neurons: 384
+    n_outputs: 29
+    depths: 5
+    taus: [2.0, 4.0, 8.0]
+    learnable_alpha: true
+    memory_mode: soft
+    branch_fusion_mode: channel_adaptive
+    frontend_type: see_lite
+    frontend_kernel_size: 7
+    frontend_dilation: 1
+    frontend_pw_bias: true
+    frontend_dw_bias: false
+    channel_mixer_type: conv
+    channel_mixer_bottleneck_ratio: 4
+    channel_mixer_kernel_size: 5
+    channel_mixer_dilation: 1
+    channel_mixer_norm_groups: 8
+    return_sequence_logits: false
+    head_bias: false
+    norm_type: bn
+    use_dp: true
+    dropout_l: 0.3
+    subsampling_factor: 2
+    backend: cupy
+    spike_mode: lif
+    init_tau: 2.0
+    v_threshold: 1.0
+    surrogate: atan
+    surrogate_alpha: 2.0
+    detach_reset: true
+    decay_input: true
+
+loss:
+  name: SpikingCELoss
+  label_smoothing: 0.1
+  branch_balance_weight: 0.01
+
+optimizer:
+  name: AdamW
+  lr: 0.002
+  weight_decay: 0.005
+  tau_weight_decay: 0.005      # 框架按 tau/branch 分组；组内 wd 相同=原平铺优化器
+  branch_weight_decay: 0.005
+  ema:
+    decay: 0.9995
+  lr_scheduler:
+    name: WarmupCosineScheduler
+    warmup_epochs: 30
+    max_epochs: 300
+    min_lr: 0.0
+
+data:
+  sample_rate: 16000
+  dataset_type: map
+  use_spike_input: true
+  dataloader:
+    batch_size: 64             # sampler 按时长打包，此值仅框架接口要求
+    num_workers: 8
+
+  train:
+    manifest_dir: examples/carKWS_offline/data
+    cuts_file: command_cuts_train_29.jsonl
+    max_duration: 1500
+    num_buckets: 30
+    num_workers: 8
+
+  valid:                       # 357 条干净测试（逐 epoch 双通道评测）
+    manifest_dir: examples/carKWS_offline/data
+    cuts_file: command_cuts_test_29.jsonl
+    max_duration: 1500
+    num_buckets: 30
+    num_workers: 8
+
+  test:
+    manifest_dir: examples/carKWS_offline/data
+    cuts_file: command_cuts_test_29.jsonl
+    max_duration: 1500
+    num_buckets: 30
+    num_workers: 8
+
+trainer:
+  max_epochs: 300
+  gradient_clip_val: 5.0
+  log_every_n_steps: 50
+  strategy: auto
+  precision: 32
+  benchmark: true
+
+trainer_callbacks:
+  progress_logger: true
+  model_checkpoints:
+    - monitor: valid/acc       # raw 权重最佳（对应历史 best-acc.pt）
+      mode: max
+      save_top_k: 1
+      save_last: true
+      filename: best-acc
+    - monitor: valid/acc_ema   # EMA 权重最佳（对应历史 best-ema.pt）
+      mode: max
+      save_top_k: 1
+      filename: best-ema
+
+stft:                          # KWS 不做 STFT，占位满足框架接口
+  n_fft: 256
+  win_length: 256
+  hop_length: 80
+  window: hann
+  center: true
+  normalized: false
+  onesided: true
+  power: null
+
+pool:
+  max_workers: 4

@@ -511,3 +511,10 @@ class MultiTauSpikeASR(SpikeASR):
     def on_test_epoch_end(self):
         super().on_test_epoch_end()
         self._save_branch_weight_snapshot('test')
+
+# KWS 任务系统注册（中文车载 29 类指令，详见 alpha/asr/kws/system.py）。
+# 放在文件末尾：本模块先完成定义，kws.system 再引用上面的类，避免循环导入。
+try:
+    from .kws.system import AnnKwsTeacher, MultiTauKwsKd  # noqa: F401,E402
+except ImportError as e:  # lhotse 等可选依赖缺失时跳过，不影响其他任务
+    logger.warning(f'KWS systems not registered: {e}')

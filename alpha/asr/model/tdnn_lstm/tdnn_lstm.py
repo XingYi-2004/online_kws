@@ -1,9 +1,14 @@
-"""KD 教师模型：TdnnLSTM ANN（32.1M 参数，29 类中文车载指令）。
+"""TdnnLstm ANN（KWS 教师/基线，约 32.1M 参数）。
 
-来源：tdnn_lstm_6ann_768_new2/exp/pretrained.pt（兄弟项目 SNN/ 训练产物，
-      KD-MT-08 离线蒸馏时的教师，权重副本固化于 kd_teacher/tdnn_ann_29class.pt）。
-训练配置（由 KD-MT-08 训练日志还原）：alpha=0.7，T=10.0。
-输入 [N, 80, T] FBank → 输出 [N, 29] logits（内部自带 3 倍下采样）。
+结构（与历史 checkpoint 逐键兼容，输入 [N, 80, T] FBank → 输出 [N, C] logits）：
+  Conv1d 80→768 k3 s1 → ReLU → BN(affine=False)
+  Conv1d 768→768 k3 s1 → ReLU → BN(affine=False)
+  Conv1d 768→768 k3 s{subsampling_factor} → ReLU → BN(affine=False)
+  6 × (LSTM 768 → BN(affine=False) → Dropout(0.1) → residual)
+  时间均值池化 → Linear 768→C
+
+已注册进框架模型表（alpha/asr/models → conf.model.name=TdnnLstm 可直接路由），
+加载 kd_teacher/tdnn_ann_29class.pt 直接兼容。
 """
 
 import torch
@@ -11,7 +16,6 @@ import torch.nn as nn
 
 
 class TdnnLstm(nn.Module):
-    """TdnnLSTM ANN（与 SNN/model_ann.py 保持一致，供 KD 教师加载）。"""
 
     def __init__(self, num_features: int, num_classes: int, subsampling_factor: int = 3):
         super().__init__()
@@ -38,8 +42,8 @@ class TdnnLstm(nn.Module):
         self.dropout = nn.Dropout(0.1)
         self.linear = nn.Linear(768, self.num_classes)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [N, C, T] → [N, 29]
+    def forward(self, x):
+        # x: [N, C, T] → [N, num_classes]
         x = self.tdnn(x)
         x = x.permute(2, 0, 1)
         for lstm, bnorm in zip(self.lstms, self.lstm_bnorms):

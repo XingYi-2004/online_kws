@@ -1,11 +1,12 @@
 """在线学习主入口（纯 AdaKWS 测试时适应）。
 
 启动：
-  cd AlphaSNN && python -m alpha.asr.kws.online.train_adakws
-  # 或 python alpha/asr/kws/online/train_adakws.py（脚本内置 sys.path 兜底）
+  cd AlphaSNN && conda activate snn
+  python examples/carKWS_online/local/train_adakws.py
 
-所有训练配置在 alpha/asr/kws/conf/online_adakws.yaml 中修改
+所有训练配置在 examples/carKWS_online/conf/online_adakws.yaml 中修改
 （GPU、模型、数据路径、超参数），不需要任何命令行参数。
+训练器（AdaKWS 算法）代码位于 alpha/asr/kws/online/trainers/。
 
 历史说明：本入口曾支持 DANN/CDAN 对抗域适应、SPACE、伪标签 OCL 及教师/
 记忆库/回放等叠加组件（DA-MT-01~64 系列实验），全部验证无收益，代码已清理；
@@ -17,10 +18,10 @@ import os
 import sys
 from pathlib import Path
 
-# 确保任意目录启动都能导入 AlphaSNN 包（sys.path 加框架根）
-_alpha_root = Path(__file__).resolve().parents[4]
-if str(_alpha_root) not in sys.path:
-    sys.path.insert(0, str(_alpha_root))
+# 框架根（local → carKWS_online → examples → AlphaSNN）
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 # 唯一配置文件（想换配置直接改它，或修改此路径）
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "conf" / "online_adakws.yaml"
@@ -97,7 +98,7 @@ def run(rank, world_size, params):
 
     # ---- 准备数据 ----
     logging.info("准备数据...")
-    from alpha.asr.kws.utils.data import build_adakws_dataloader, load_cuts
+    from alpha.asr.kws.dataset import build_adakws_dataloader, load_cuts
 
     # 目标域（测试集，全部数据；无标签，仅输入参与适应）
     target_cuts = load_cuts(params.data.target.manifest_dir, params.data.target.cuts_file)
@@ -167,7 +168,7 @@ def main():
             "缺少依赖 omegaconf，当前 python 环境不对。\n"
             "请先激活 snn 环境再运行：\n"
             "  conda activate snn\n"
-            "  python online/train_adakws.py"
+            "  python examples/carKWS_online/local/train_adakws.py"
         )
 
     os.environ["CUDA_VISIBLE_DEVICES"] = OmegaConf.load(CONFIG_PATH).system.cuda_visible_devices

@@ -19,6 +19,19 @@ def extract_labels(batch: dict, device) -> torch.Tensor:
     return torch.tensor(labels, dtype=torch.long).to(device)
 
 
+def batch_lengths(batch: dict, device) -> torch.Tensor:
+    """每条 cut 的有效 FBank 帧数（num_frames 优先，回退 duration×100）。
+
+    统一供离线训练（system.py）、评测（compute_test_accuracy）与
+    在线适应（adakws_trainer）使用，避免三处重复实现。
+    """
+    return torch.tensor(
+        [getattr(cut, "num_frames", None) or int(round(cut.duration * 100))
+         for cut in batch["supervisions"]["cut"]],
+        dtype=torch.long, device=device,
+    )
+
+
 def compute_test_accuracy(
     model: nn.Module,
     test_dl: torch.utils.data.DataLoader,
@@ -31,12 +44,7 @@ def compute_test_accuracy(
     total_samples = 0
     for batch in test_dl:
         feature = batch["inputs"].to(device).permute(0, 2, 1)
-        lengths = torch.tensor(
-            [getattr(cut, "num_frames", None) or int(round(cut.duration * 100))
-             for cut in batch["supervisions"]["cut"]],
-            dtype=torch.long,
-            device=device,
-        )
+        lengths = batch_lengths(batch, device)
         functional.reset_net(model)
         class_logits = model(feature, lengths)
         labels = extract_labels(batch, device)
@@ -73,12 +81,7 @@ def compute_subset_accuracy(
     with torch.no_grad():
         for batch in test_dl:
             feature = batch["inputs"].to(device).permute(0, 2, 1)
-            lengths = torch.tensor(
-                [getattr(cut, "num_frames", None) or int(round(cut.duration * 100))
-                 for cut in batch["supervisions"]["cut"]],
-                dtype=torch.long,
-                device=device,
-            )
+            lengths = batch_lengths(batch, device)
             functional.reset_net(model)
             class_logits = model(feature, lengths)
             labels = extract_labels(batch, device)

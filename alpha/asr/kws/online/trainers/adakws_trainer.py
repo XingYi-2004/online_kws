@@ -20,15 +20,7 @@ from spikingjelly.activation_based import functional
 from torch.utils.tensorboard import SummaryWriter
 from typing import Optional
 
-
-def _batch_lengths(batch: dict, device) -> torch.Tensor:
-    lengths = []
-    for cut in batch["supervisions"]["cut"]:
-        num_frames = getattr(cut, "num_frames", None)
-        if not num_frames:
-            num_frames = int(round(cut.duration * 100))
-        lengths.append(num_frames)
-    return torch.tensor(lengths, dtype=torch.long, device=device)
+from alpha.asr.kws.utils.train_utils import batch_lengths as _batch_lengths
 
 
 def _set_adaptation_parameters(

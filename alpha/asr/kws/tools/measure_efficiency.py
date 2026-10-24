@@ -16,7 +16,8 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# 框架根（tools → kws → asr → alpha → AlphaSNN）
+PROJECT_ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import numpy as np
@@ -43,7 +44,7 @@ def _load_yaml(path: Path) -> dict:
 # ============================================================
 
 def _build_tdnnlstm(entry, ckpt, device):
-    from tdnn.model_ann import TdnnLstm
+    from alpha.asr.model.tdnn_lstm import TdnnLstm
     model = TdnnLstm(
         num_features=80,
         num_classes=entry["num_class"],
@@ -53,91 +54,10 @@ def _build_tdnnlstm(entry, ckpt, device):
     return model
 
 
-def _build_tdnnsnn(entry, ckpt, device):
-    from tdnn.model_snn import TdnnSNN
-    model = TdnnSNN(
-        num_features=80,
-        num_classes=entry["num_class"],
-        subsampling_factor=entry.get("subsampling_factor", 3),
-    )
-
-    sd = ckpt["_sd"]
-    # 兼容旧版 Sequential 格式: tdnn.{0,2,3,5,6,8}.* → conv{1,2,3}.weight / bn{1,2,3}.*
-    old_new_map = {
-        "tdnn.0.": "conv1.",
-        "tdnn.2.": "bn1.",
-        "tdnn.3.": "conv2.",
-        "tdnn.5.": "bn2.",
-        "tdnn.6.": "conv3.",
-        "tdnn.8.": "bn3.",
-    }
-    remapped = {}
-    for k, v in sd.items():
-        for old_prefix, new_prefix in old_new_map.items():
-            if k.startswith(old_prefix):
-                remapped[new_prefix + k[len(old_prefix):]] = v
-                break
-        else:
-            remapped[k] = v  # lstms / lstm_bnorms / linear / ... 不用改
-
-    model.load_state_dict(remapped, strict=False)
-    return model
-
-
-def _build_skipconvnext(entry, ckpt, device):
-    skip_dir = str(PROJECT_ROOT / "SkipConvNext")
-    if skip_dir not in sys.path:
-        sys.path.insert(0, skip_dir)
-
-    import importlib.util, re
-    cfg_path = PROJECT_ROOT / "SkipConvNext" / "best_config_GSC_former.py"
-    spec = importlib.util.spec_from_file_location("_skip_cfg", cfg_path)
-    cfg_mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(cfg_mod)
-    config = cfg_mod.Config()
-
-    sd = ckpt["_sd"]
-    # 从 checkpoint 推断 n_inputs / n_mels（GSC35 是 140 维，41/29 类是 80 维）
-    for k in sd:
-        if k.endswith("see.pwconv.conv.weight"):
-            config.n_inputs = sd[k].shape[1]
-            config.n_mels = sd[k].shape[1]
-            break
-    # 从 checkpoint 推断 branch_neuron_type（plif 带 decay_logit，lif 不带）
-    if any("decay_logit" in k for k in sd):
-        config.branch_neuron_type = "plif"
-
-    config.n_outputs = entry["num_class"]
-    block_indices = set()
-    for k in sd.keys():
-        # 兼容 "model.blocks.N." 和 "blocks.N." 两种前缀
-        m = re.match(r"(?:model\.)?blocks\.(\d+)\.", k)
-        if m:
-            block_indices.add(int(m.group(1)))
-    config.depths = max(block_indices) + 1 if block_indices else 1
-
-    from models.spikconvnext import SpikConvNext
-    model = SpikConvNext(config)
-
-    # 只去掉 "model." 前缀（如果有的话），否则保持原样
-    state_dict = {}
-    for k, v in sd.items():
-        if k.startswith("model."):
-            state_dict[k[6:]] = v
-        else:
-            state_dict[k] = v
-    model.load_state_dict(state_dict)
-    return model
-
-
 def _build_alphasnn(entry, ckpt, device):
     import re
 
-    alpha_root = str(PROJECT_ROOT / "AlphaSNN")
-    if alpha_root not in sys.path:
-        sys.path.insert(0, alpha_root)
-
-    from offline.model_multitau import AlphaSNNForKWS
+    from alpha.asr.kws.model_kws import MultiTauLIFCommanderKWS
 
     cfg_path = PROJECT_ROOT / entry["config"]
     yaml_cfg = _load_yaml(cfg_path)
@@ -170,15 +90,13 @@ def _build_alphasnn(entry, ckpt, device):
             model_cfg["n_inputs"] = sd[k].shape[1]
             break
 
-    model = AlphaSNNForKWS(model_cfg)
+    model = MultiTauLIFCommanderKWS(model_cfg)
     model.load_state_dict(ckpt["_sd"])
     return model
 
 
 BUILDERS = {
     "tdnnlstm":     _build_tdnnlstm,
-    "tdnnsnn":      _build_tdnnsnn,
-    "skipconvnext": _build_skipconvnext,
     "alphasnn":     _build_alphasnn,
 }
 
@@ -309,10 +227,7 @@ def load_test_data(test_cfg):
 def _format_input(feats, model_type, device):
     """将 (T, 80) 转为模型需要的输入格式 [1, ...] 并移到 device。"""
     x = feats.unsqueeze(0).to(device)  # [1, T, 80]
-    if model_type == "skipconvnext":
-        return x  # [B, T, F]
-    else:
-        return x.transpose(1, 2)  # [B, C, T] for tdnn/alphasnn
+    return x.transpose(1, 2)  # [B, C, T] for tdnnlstm/alphasnn
 
 
 def _compute_fanouts(model):

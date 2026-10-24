@@ -1,12 +1,15 @@
 """车载语音指令 KWS（29 类中文指令）。
 
 子模块：
-  offline/  离线训练（MultiTauLIFCommander + KD 蒸馏，干净测试 98.04%）与评测
-  online/   在线学习（AdaKWS source-free 测试时适应，87.86% → 90.20%）
-  conf/     两份入口配置（offline_kd.yaml / online_adakws.yaml）
-  utils/    数据加载（lhotse CutSet + 预计算 FBank）、评测、checkpoint 键映射
-  tools/    效率测量、回放库构建等独立工具
+  system.py        Lightning 训练系统（AnnKwsTeacher / MultiTauKwsKd，
+                   由 alpha/asr/system.py 末尾注册给框架 get_model）
+  dataset.py       Lhotse cuts 数据集与 DataLoader（预计算 FBank）
+  tdnn_lstm.py     TdnnLstm ANN（教师/基线，唯一权威定义）
+  schedulers.py    LinearWarmupCosineLR（ANN 教师调度）
+  model_kws.py     推理/在线适应封装（subsample + MultiTauLIFCommander）
+  utils/           配置加载、标签/精度评测、checkpoint 键映射
+  online/          在线学习（AdaKWS source-free 测试时适应）训练器
+  tools/           效率测量独立工具
 
-2026-10-24 自 online_kws/SNN 与 online_kws/SNN_aol 迁入 AlphaSNN 框架，
-训练/评测算法逻辑未做任何改动。
+配置与数据在 examples/carKWS_offline/ 与 examples/carKWS_online/。
 """

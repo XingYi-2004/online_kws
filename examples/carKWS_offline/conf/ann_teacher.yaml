@@ -1,0 +1,109 @@
+# ============================================================================
+# ANN 教师训练（TdnnLstm，29 类中文车载指令）—— AlphaSNN Lightning 管线
+# ============================================================================
+# 超参数逐项对齐原版（tdnn_lstm_6ann_768_new2，干净测试 99.72%）：
+#   AdamW lr=2e-4 wd=5e-4，20 epoch，LinearLR(0.1→1.0, 3ep)+Cosine(T_max=17, η=1e-6)，
+#   DynamicBucketing max_duration=200 num_buckets=30，SpecAugment(warp80,
+#   frames100×10, feats27×2)，seed=42 且每 epoch seed+epoch。
+# 启动：cd AlphaSNN && conda activate snn
+#   python -m modules.launch cmd=train conf=examples/carKWS_offline/conf/ann_teacher.yaml version=ann01
+# ============================================================================
+
+name: carKWS
+version: ann01
+
+system:
+  name: AnnKwsTeacher
+  exp_name: carKWS_ANN
+  debug: false
+  seed: 42
+  log_dir: exp/logs
+  train_and_test: true   # 训练结束对 test 集再测一次
+  test_metric: false     # 关闭框架的增强指标（PESQ 等，KWS 不适用）
+
+model:
+  name: TdnnLstm
+  param:
+    num_features: 80
+    num_classes: 29
+    subsampling_factor: 3
+
+loss:
+  name: SpikingCELoss    # 等价 CrossEntropyLoss（label_smoothing=0）
+  label_smoothing: 0.0
+
+optimizer:
+  name: AdamW
+  lr: 2.0e-4
+  weight_decay: 5.0e-4
+  lr_scheduler:
+    name: LinearWarmupCosineLR
+    warmup_epochs: 3
+    max_epochs: 20
+    warmup_start_factor: 0.1
+    eta_min: 1.0e-6
+
+data:
+  sample_rate: 16000
+  dataset_type: map
+  use_spike_input: true
+  dataloader:
+    batch_size: 64       # sampler 按时长打包，此值仅框架接口要求
+    num_workers: 8
+
+  train:
+    manifest_dir: examples/carKWS_offline/data
+    cuts_file: command_cuts_train_29.jsonl
+    max_duration: 200
+    num_buckets: 30
+    num_workers: 8
+    spec_augment:        # lhotse SpecAugment（与原版日志一致）
+      time_warp_factor: 80
+      num_frame_masks: 10
+      frames_mask_size: 100
+      num_feature_masks: 2
+      features_mask_size: 27
+
+  valid:                 # 原版约定：valid 与 test 为同一 357 条干净集
+    manifest_dir: examples/carKWS_offline/data
+    cuts_file: command_cuts_test_29.jsonl
+    max_duration: 200
+    num_buckets: 30
+    num_workers: 2
+
+  test:
+    manifest_dir: examples/carKWS_offline/data
+    cuts_file: command_cuts_test_29.jsonl
+    max_duration: 200
+    num_buckets: 30
+    num_workers: 2
+
+trainer:
+  max_epochs: 20
+  log_every_n_steps: 50
+  strategy: auto
+  precision: 32
+  benchmark: true
+
+trainer_callbacks:
+  progress_logger: true
+  model_checkpoints:
+    - monitor: valid/acc
+      mode: max
+      save_top_k: -1              # 保存全部 epoch，供 9–17 平均导出教师
+      save_weights_only: true     # 仅权重（平均导出足够）
+      auto_insert_metric_name: false
+      filename: "epoch={epoch}"
+
+stft:                    # KWS 不做 STFT，占位满足框架接口
+  n_fft: 256
+  win_length: 256
+  hop_length: 80
+  window: hann
+  center: true
+  normalized: false
+  onesided: true
+  power: null
+
+pool:
+  max_workers: 4

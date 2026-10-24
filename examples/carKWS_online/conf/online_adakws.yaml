@@ -2,14 +2,11 @@
 # 在线学习（AdaKWS 测试时适应）训练配置
 # ============================================================================
 # 纯 AdaKWS：目标域无标签，只更新 BatchNorm affine 参数（4608 个）。
-# 历史上的 DA（DANN/CDAN）、SPACE、伪标签 OCL 及教师/记忆库/回放/BCT 等叠加
-# 组件均已随实验清理（验证均无收益），记录见 SNN_aol/README.md 的 DA-MT 系列
-# 与 ONLINE_LEARNING_HANDOFF.md。
-#
 # 所有训练配置都在此文件修改，启动命令：
-#   cd AlphaSNN && python -m alpha.asr.kws.online.train_adakws
+#   cd AlphaSNN && python examples/carKWS_online/local/train_adakws.py
 #
-# 相对路径解析基准：exp_dir 以 online/ 目录为基准，其余路径以项目根 SNN_aol 为基准。
+# 相对路径解析基准：exp_dir 以 alpha/asr/kws/online/ 为基准，
+# pretrained_model / manifest_dir 以项目根 AlphaSNN 为基准。
 # ============================================================================
 
 # ═══════════════════════════════════════════════════════════════
@@ -34,11 +31,11 @@ system:
 #  路径
 # ═══════════════════════════════════════════════════════════════
 paths:
-  # 预训练模型（重建版 raw：干净测试集 98.04%，experiment4/E224）。
-  # ⚠️ 全仓库加载链路统一用 weights_only=True（更安全的反序列化白名单模式）；
-  #    若要改回 KD-MT-08 原版 checkpoint（内含 PosixPath，白名单默认拒绝），
-  #    需把 train_utils/eval_multitau 的 weights_only 改回 False 或重加白名单。
-   pretrained_model: /home/huxixiang20040727/SNN_online_learn/online_kws/AlphaSNN/alphasnn_29class_kd_rebuild_v2/experiment4/best-ema.pt
+  # 预训练模型：离线 SNN KD 训练后由 export_kws.py 导出（{"model": ...} 格式）。
+  # ⚠️ 换用自己训练的 checkpoint 时改成对应导出路径；
+  #    历史重建版（干净测试 98.04%）为
+  #    alphasnn_29class_kd_rebuild_v2/experiment4/best-ema.pt。
+   pretrained_model: exp/logs/carKWS_SNN_KD/kd01/checkpoints/export/best-ema.pt
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -118,7 +115,7 @@ data:
   # 无 RIR 子目标域（409 真实车载 + 662 加噪 simu = 1071 条；
   # 标准 1428 条清单为 command_cuts_test_29.jsonl）
   target:
-    manifest_dir: /home/huxixiang20040727/SNN_online_learn/online_kws/AlphaSNN/data_train/fbank
+    manifest_dir: examples/carKWS_online/data
     cuts_file: command_cuts_test_29_no_rir.jsonl    # 目标域 cuts 清单
     on_the_fly_feats: false                  # false=用预计算特征
     test_num_workers: 8                      # 评测/适应 dataloader 进程数
