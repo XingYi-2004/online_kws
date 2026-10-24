@@ -267,6 +267,15 @@ data
     └── extract
 ```
 
+## 5. Dataset of car_command
+离线学习训练集路径：/home/huxixiang20040727/AlphaSNN/examples/carKWS_offline/data
+```txt
+carKWS_offline/data： command_feats_test测试集FBANK特征
+                      command_feats_train训练集FBANK特征
+                      command_cuts_test_29.jsonl测试集.jsonl文件，类似于csv文件
+                      command_cuts_train_29.jsonl训练集.jsonl文件，类似于csv文件
+    
+```
 ## Baseline Replication
 
 基于论文，已经跑通了所有数据集的baseline，参考数值如下。
