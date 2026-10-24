@@ -32,7 +32,7 @@ import torch
 from lhotse.utils import fix_random_seed
 
 from alpha.asr.kws.dataset import build_eval_loader, load_cuts
-from alpha.asr.kws.model_kws import MultiTauLIFCommanderKWS
+from alpha.asr.model.multitau_lif_commander_kws import MultiTauLIFCommanderKWS
 from alpha.asr.kws.utils.config import load_config
 from alpha.asr.kws.utils.train_utils import compute_test_accuracy, load_pretrained_model
 
@@ -46,7 +46,8 @@ SEED = 312
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--ckpt', required=True, help='raw 权重 {"model": ...}')
+    parser.add_argument('--ckpt', required=True,
+                        help='raw 权重（Lightning .ckpt 或 {"model": ...} 格式）')
     parser.add_argument('--ckpt-ema', default=None, help='EMA 权重（可选）')
     args = parser.parse_args()
 
@@ -63,6 +64,8 @@ def main():
     for tag, ckpt in [('raw', args.ckpt), ('EMA', args.ckpt_ema)]:
         if not ckpt:
             continue
+        # .ckpt 为 Lightning 格式：EMA 项需物化 ema_state_dict（use_ema）
+        params.paths.use_ema = (tag == 'EMA') and ckpt.endswith('.ckpt')
         model = MultiTauLIFCommanderKWS(dict(params.model)).to(device)
         params.paths.pretrained_model = str(Path(ckpt).resolve())
         load_pretrained_model(params, model)

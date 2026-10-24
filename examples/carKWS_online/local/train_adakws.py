@@ -49,21 +49,25 @@ def run(rank, world_size, params):
 
         setup_dist(rank, world_size, system.master_port)
 
-    system.exp_dir.mkdir(parents=True, exist_ok=True)
+    # 产物目录（与离线对齐）：exp/logs/<exp_name>/<version>/{log.log, hparams.yaml,
+    # tensorboard/, checkpoints/}
+    system.root_dir.mkdir(parents=True, exist_ok=True)
+    (system.root_dir / "checkpoints").mkdir(parents=True, exist_ok=True)
+
     from icefall.utils import setup_logger
 
-    log_file = system.exp_dir / system.log_filename
-    setup_logger(f"{log_file}")
-    logging.info(f"实验目录: {system.exp_dir}")
-    from alpha.asr.kws.utils.config import log_config
+    setup_logger(f"{system.log_file}")
+    logging.info(f"实验目录: {system.root_dir}")
+    from alpha.asr.kws.utils.config import dump_hparams, log_config
 
     log_config(params)
+    dump_hparams(params, system.root_dir / "hparams.yaml")
 
     tb_writer = None
     if system.tensorboard:
         from torch.utils.tensorboard import SummaryWriter
 
-        tb_writer = SummaryWriter(log_dir=f"{system.exp_dir}/tensorboard")
+        tb_writer = SummaryWriter(log_dir=f"{system.root_dir}/tensorboard")
 
     device = torch.device("cuda", rank) if torch.cuda.is_available() else torch.device("cpu")
 
@@ -78,7 +82,7 @@ def run(rank, world_size, params):
 
     # ---- 创建模型 ----
     logging.info("创建模型...")
-    from alpha.asr.kws.model_kws import MultiTauLIFCommanderKWS
+    from alpha.asr.model.multitau_lif_commander_kws import MultiTauLIFCommanderKWS
 
     model = MultiTauLIFCommanderKWS(dict(params.model))
     logging.info(f"模型参数数量: {sum(p.numel() for p in model.parameters()):,}")
@@ -122,7 +126,7 @@ def run(rank, world_size, params):
         logging.info(f"  初始[{subset_names.get(key, key)}]: {r['acc']:.4f} (n={r['n']})")
 
     # 保存在线适应前模型（适应把模型带坏时可回滚到这里）
-    init_model_path = system.exp_dir / "init-model.pt"
+    init_model_path = system.root_dir / "checkpoints" / "init-model.pt"
     torch.save({"model": model.state_dict()}, init_model_path)
     logging.info(f"已保存在线适应前初始模型: {init_model_path}")
 
@@ -130,15 +134,15 @@ def run(rank, world_size, params):
     logging.info("=" * 40)
     logging.info("开始在线学习")
     logging.info("=" * 40)
-    from alpha.asr.kws.online.trainers.online_trainer import train_online
+    from alpha.asr.kws.online.trainers.adakws_trainer import train_adakws
 
-    train_online(params, model, target_dl, eval_dl, device, tb_writer)
+    train_adakws(params, model, target_dl, eval_dl, device, tb_writer)
 
     # ---- 最终测试（加载无监督评分选出的最佳模型） ----
     logging.info("=" * 40)
     logging.info("最终测试")
     logging.info("=" * 40)
-    best_model_path = system.exp_dir / "best-adakws.pt"
+    best_model_path = system.root_dir / "checkpoints" / "best-adakws.pt"
     if best_model_path.exists():
         checkpoint = torch.load(best_model_path, map_location=device, weights_only=True)
         model.load_state_dict(checkpoint["model"])

@@ -27,7 +27,7 @@ from modules.utils.logging import logger
 from alpha.asr.system import LiteASR, MultiTauSpikeASR
 from alpha.asr.model.tdnn_lstm import TdnnLstm
 from alpha.asr.kws.dataset import build_eval_loader, build_train_loader
-from alpha.asr.kws.model_kws import subsampling_mask
+from alpha.asr.model.multitau_lif_commander_kws import subsampling_mask
 from alpha.asr.kws.utils.train_utils import batch_lengths, extract_labels
 
 

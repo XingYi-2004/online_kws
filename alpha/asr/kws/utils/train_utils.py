@@ -1,6 +1,7 @@
 """训练通用工具：标签提取、精度评测、预训练权重加载。"""
 
 import logging
+import traceback
 from pathlib import Path
 
 import torch
@@ -94,16 +95,45 @@ def compute_subset_accuracy(
 
 
 # ═══════════════════════════════════════════════════════════════
-#  预训练权重加载
+#  预训练权重加载（直接支持离线 Lightning .ckpt 与历史 {"model": ...} 格式）
 # ═══════════════════════════════════════════════════════════════
 
-def load_pretrained_model(params: AttributeDict, model: nn.Module) -> None:
-    """加载离线预训练权重到 MultiTauLIFCommanderKWS.backbone。
+def _torch_load_any(filename: Path):
+    """Lightning ckpt 内含 OmegaConf 等对象需 weights_only=False；其余走安全模式。"""
+    try:
+        return torch.load(filename, map_location='cpu', weights_only=True)
+    except Exception:
+        return torch.load(filename, map_location='cpu', weights_only=False)
 
-    checkpoint 结构: {"model": AlphaSNNForKWS.state_dict(), ...}
-    参数名映射:  model.xxx      → backbone.xxx
-                 subsample.xxx  → subsample.xxx（同名）
-    其余前缀（如历史 checkpoint 的 domain_classifier.*）一律丢弃。
+
+def _materialize_lightning_ema(ckpt: dict) -> dict:
+    """把 Lightning ckpt 的 torch_ema 影子参数换入同构模型，返回 model.* 权重。
+
+    仅当 paths.use_ema=true 且 ckpt 含 ema_state_dict 时调用。
+    """
+    from omegaconf import OmegaConf
+    from torch_ema import ExponentialMovingAverage
+    from alpha.asr.kws.system import MultiTauKwsKd  # 局部导入避免循环
+
+    conf = OmegaConf.create(ckpt.get('hyper_parameters') or {})
+    if 'model' not in conf:
+        raise RuntimeError('Lightning ckpt 缺少 hyper_parameters，无法物化 EMA')
+    system = MultiTauKwsKd(conf)
+    system.load_state_dict(ckpt['state_dict'])
+    ema = ExponentialMovingAverage(system.parameters(), decay=0.9995)
+    ema.load_state_dict(ckpt['ema_state_dict'])
+    ema.copy_to(system.parameters())
+    return {f'model.{k}': v for k, v in system.model.state_dict().items()}
+
+
+def load_pretrained_model(params: AttributeDict, model: nn.Module) -> None:
+    """加载离线预训练权重到 MultiTauLIFCommanderKWS（keys: frontend/blocks/classifier）。
+
+    支持 checkpoint（自动识别）：
+      1. Lightning .ckpt（state_dict / ema_state_dict + hyper_parameters）
+         - paths.use_ema=true 时物化 EMA 权重，否则用 raw state_dict
+      2. 历史/导出格式 {"model": {...}}（model.* 键）
+    键映射：model.* / backbone.* 前缀一律剥掉，落到本模型的裸键。
     """
     filename = Path(params.paths.pretrained_model)
     logging.info(f"尝试加载预训练模型: {filename}")
@@ -115,17 +145,28 @@ def load_pretrained_model(params: AttributeDict, model: nn.Module) -> None:
         return
 
     try:
-        checkpoint = torch.load(filename, map_location="cpu", weights_only=True)
-        src_state = checkpoint["model"] if "model" in checkpoint else checkpoint
+        ckpt = _torch_load_any(filename)
+        use_ema = bool(getattr(params.paths, 'use_ema', False))
+
+        if isinstance(ckpt, dict) and 'state_dict' in ckpt:      # Lightning
+            if use_ema and 'ema_state_dict' in ckpt:
+                src_state = _materialize_lightning_ema(ckpt)
+                logging.info('已物化 EMA 权重（ema_state_dict → model）')
+            else:
+                src_state = {k: v for k, v in ckpt['state_dict'].items()
+                             if k.startswith('model.')}
+        elif isinstance(ckpt, dict) and 'model' in ckpt:          # 历史/导出格式
+            src_state = ckpt['model']
+        else:
+            src_state = ckpt                                       # 裸 state_dict
 
         mapped = {}
         for key, value in src_state.items():
-            if key.startswith("model."):
-                mapped["backbone." + key[6:]] = value
-            elif key.startswith("backbone."):
-                # AdaKWS 产物的 checkpoint 直接以 backbone.* 保存，直通加载
-                mapped[key] = value
-            elif key.startswith("subsample."):
+            if key.startswith('model.'):
+                mapped[key[len('model.'):]] = value
+            elif key.startswith('backbone.'):  # 兼容历史在线产物
+                mapped[key[len('backbone.'):]] = value
+            else:
                 mapped[key] = value
 
         missing, unexpected = model.load_state_dict(mapped, strict=False)
@@ -134,7 +175,7 @@ def load_pretrained_model(params: AttributeDict, model: nn.Module) -> None:
         logging.info(f"成功加载 {len(mapped)} 个预训练参数（共 {len(src_state)} 个）")
 
     except Exception as e:
-        logging.warning(f"加载预训练模型失败: {e}")
+        logging.warning(f"加载预训练模型失败: {e}\n{traceback.format_exc()}")
         logging.info("将使用随机初始化的模型开始训练")
 
     logging.info(f"模型参数数量: {sum(p.numel() for p in model.parameters()):,}")

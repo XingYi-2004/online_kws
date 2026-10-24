@@ -18,8 +18,10 @@ data/                     目标域清单 + command_feats_test.lca
 conda activate snn
 cd AlphaSNN
 
-# 1) 先完成离线训练并导出（见 ../carKWS_offline/readme.md），
-#    然后把导出路径填入 conf/online_adakws.yaml 的 paths.pretrained_model
+# 1) 完成离线训练（见 ../carKWS_offline/readme.md）。conf 里
+#    paths.pretrained_model 默认指向 kd01 的 best-ema.ckpt——加载器直接读
+#    Lightning ckpt 并自动物化 EMA；用 raw 则改 best-acc.ckpt + use_ema: false；
+#    也兼容历史 .pt 格式（如 experiment4/best-ema.pt）
 
 # 2) 运行（入口自动读取本目录配置，无命令行参数）
 python examples/carKWS_online/local/train_adakws.py
@@ -29,7 +31,7 @@ python examples/carKWS_online/local/train_adakws.py
 
 | 项 | 值 |
 |---|---|
-| 预训练 | 离线导出 `best-ema.pt`（干净测试 98.04%） |
+| 预训练 | 离线 `best-ema.ckpt`（干净测试 98.04%，加载器自动物化 EMA） |
 | 目标域 | 1071 条 no-RIR（`command_cuts_test_29_no_rir.jsonl`） |
 | 迭代 / batch / steps | 10 轮 / 128 条 / 每 batch 1 步 |
 | 优化器 | Adam lr=2.2e-3，wd=0 |
@@ -38,11 +40,17 @@ python examples/carKWS_online/local/train_adakws.py
 | Mask | 时≤20 帧×2，频≤5 带×2 |
 | seed / grad clip | 42 / 5.0 |
 
-## 输出
+## 产物（与离线训练同构）
 
-`alpha/asr/kws/online/train.log/<时间戳>/`：
-- `log-train-<时间戳>` 全程日志（含初始/最终精度与子集分解）
-- `init-model.pt` 适应前模型；`best-adakws.pt` 无监督评分最佳模型
+```
+exp/logs/carKWS_online/online01/
+├── log.log              # 全程日志（初始/最终精度与子集分解）
+├── hparams.yaml         # 运行配置快照
+├── tensorboard/         # system.tensorboard: true 时生成
+└── checkpoints/
+    ├── init-model.pt    # 适应前模型
+    └── best-adakws.pt   # 无监督评分最佳模型（{"model": ...} 可直接部署）
+```
 
 ## 注意
 

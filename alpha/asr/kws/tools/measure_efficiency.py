@@ -57,7 +57,7 @@ def _build_tdnnlstm(entry, ckpt, device):
 def _build_alphasnn(entry, ckpt, device):
     import re
 
-    from alpha.asr.kws.model_kws import MultiTauLIFCommanderKWS
+    from alpha.asr.model.multitau_lif_commander_kws import MultiTauLIFCommanderKWS
 
     cfg_path = PROJECT_ROOT / entry["config"]
     yaml_cfg = _load_yaml(cfg_path)
@@ -91,7 +91,16 @@ def _build_alphasnn(entry, ckpt, device):
             break
 
     model = MultiTauLIFCommanderKWS(model_cfg)
-    model.load_state_dict(ckpt["_sd"])
+    # model.* / backbone.* 前缀一律剥掉，落到继承模型的裸键（frontend/blocks/classifier）
+    stripped = {}
+    for k, v in sd.items():
+        if k.startswith("model."):
+            stripped[k[len("model."):]] = v
+        elif k.startswith("backbone."):
+            stripped[k[len("backbone."):]] = v
+        else:
+            stripped[k] = v
+    model.load_state_dict(stripped)
     return model
 
 

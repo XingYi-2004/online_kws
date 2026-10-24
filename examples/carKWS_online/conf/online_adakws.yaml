@@ -13,12 +13,14 @@
 #  系统设置
 # ═══════════════════════════════════════════════════════════════
 system:
-  # 实验输出目录（相对 online/ 目录）。每次运行自动生成时间戳子目录：
-  #   online/train.log/<时间戳>/log-train-<时间戳>   日志
-  #   online/train.log/<时间戳>/init-model.pt        适应前初始模型
-  #   online/train.log/<时间戳>/best-adakws.pt       无监督评分最佳模型
-  exp_dir: train.log
-  log_filename: log-train
+  # 产物目录（与离线训练对齐）：exp/logs/carKWS_online/<version>/
+  #   ├── log.log            日志
+  #   ├── hparams.yaml       运行配置快照
+  #   ├── tensorboard/       （system.tensorboard: true 时）
+  #   └── checkpoints/       init-model.pt / best-adakws.pt
+  exp_name: carKWS_online
+  version: online01
+  log_filename: log.log
   cuda_visible_devices: "0"
   world_size: 1                # 单卡训练
   master_port: 12354           # DDP 主端口（world_size>1 时用）
@@ -31,11 +33,11 @@ system:
 #  路径
 # ═══════════════════════════════════════════════════════════════
 paths:
-  # 预训练模型：离线 SNN KD 训练后由 export_kws.py 导出（{"model": ...} 格式）。
-  # ⚠️ 换用自己训练的 checkpoint 时改成对应导出路径；
-  #    历史重建版（干净测试 98.04%）为
-  #    alphasnn_29class_kd_rebuild_v2/experiment4/best-ema.pt。
-   pretrained_model: exp/logs/carKWS_SNN_KD/kd01/checkpoints/export/best-ema.pt
+  # 预训练模型：直接用离线 Lightning checkpoint（best-ema.ckpt 内含 EMA，
+  # 加载器自动物化；best-acc.ckpt 为 raw，配 use_ema: false）。
+  # 也兼容历史 {"model": ...} 格式（如 experiment4/best-ema.pt，此时 use_ema 无效）。
+  pretrained_model: exp/logs/carKWS_SNN_KD/kd01/checkpoints/best-ema.ckpt
+  use_ema: true
 
 
 # ═══════════════════════════════════════════════════════════════

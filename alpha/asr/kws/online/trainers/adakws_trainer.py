@@ -65,11 +65,11 @@ def _set_adaptation_parameters(
                     module.bias.requires_grad = True
 
     if update_scope in {"bn_classifier", "last_block_classifier"}:
-        for parameter in core.backbone.classifier.parameters():
+        for parameter in core.classifier.parameters():
             parameter.requires_grad = True
 
     if update_scope == "last_block_classifier":
-        for parameter in core.backbone.blocks[-1].parameters():
+        for parameter in core.blocks[-1].parameters():
             parameter.requires_grad = True
 
     trainable = [parameter for parameter in model.parameters() if parameter.requires_grad]
@@ -299,6 +299,7 @@ def train_adakws(
     model.load_state_dict(best_state)
     logging.info("AdaKWS 适应完成：按无监督评分保留迭代 %d 的模型", best_iteration)
 
-    best_path = Path(params.system.exp_dir) / "best-adakws.pt"
+    best_path = Path(params.system.exp_dir) / "checkpoints" / "best-adakws.pt"
+    best_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"model": model.state_dict()}, best_path)
     logging.info("AdaKWS 最佳模型已保存: %s", best_path)

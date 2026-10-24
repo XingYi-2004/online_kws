@@ -12,7 +12,7 @@
 ```
 conf/ann_teacher.yaml   ANN 教师训练
 conf/offline_kd.yaml    SNN 知识蒸馏
-local/export_kws.py     Lightning ckpt → 在线兼容格式（{"model": ...}）
+local/export_teacher.py ANN 教师 epoch 9–17 平均导出（→ KD 教师权重）
 local/eval_kws.py       固定口径评测（1500s / 30 buckets / seed 312）
 data/                   command_cuts_{train,test}_29.jsonl + command_feats_{train,test}/
 ```
@@ -39,13 +39,14 @@ python -m modules.launch cmd=train conf=examples/carKWS_offline/conf/ann_teacher
 | SpecAugment | warp80，时遮罩 100×10，频遮罩 27×2 |
 | 损失 | CrossEntropy |
 
-产物：`exp/logs/carKWS_ANN/ann01/checkpoints/epoch={0..19}.ckpt`（全量保存）。
-教师导出（对应原版 decode_ann --epoch 17 --avg 9）：
+产物：`exp/logs/carKWS_ANN/ann01/`（log.log + hparams.yaml + tensorboard + checkpoints/epoch={0..19}.ckpt + best_k_models.yaml）。
+教师导出 + 自动评测（对应原版 decode_ann --epoch 17 --avg 9 --export；导出后自动报告平均教师测试精度，期望 ≈99.7%，明显偏低先排查再开蒸馏）：
 
 ```bash
-python examples/carKWS_offline/local/export_kws.py --mode teacher \
+python examples/carKWS_offline/local/export_teacher.py \
     --ckpt-dir exp/logs/carKWS_ANN/ann01/checkpoints \
     --start-epoch 9 --end-epoch 17 --out kd_teacher/pretrained_ft.pt
+# 复测已有平均权重：加 --eval-only
 ```
 
 ## 2. SNN 知识蒸馏
@@ -67,21 +68,19 @@ python -m modules.launch cmd=train conf=examples/carKWS_offline/conf/offline_kd.
 | 数据打包 | DynamicBucketing 1500s / 30 buckets，seed 312 |
 | 双通道验证 | 每 epoch 分别评 raw（valid/acc）与 EMA（valid/acc_ema） |
 
-产物（`exp/logs/carKWS_SNN_KD/kd01/checkpoints/`）：
-- `best-acc.ckpt` — valid/acc（raw）最佳 → 对应历史 best-acc.pt
-- `best-ema.ckpt` — valid/acc_ema 最佳 → 对应历史 best-ema.pt
-- `last.ckpt` — 最后一轮
+产物（`exp/logs/carKWS_SNN_KD/kd01/`，与 ANN 同构）：
+- `log.log` / `hparams.yaml` / tensorboard events / `best_k_models.yaml`
+- `checkpoints/best-acc.ckpt` — valid/acc（raw）最佳 → 对应历史 best-acc.pt
+- `checkpoints/best-ema.ckpt` — valid/acc_ema 最佳 → 对应历史 best-ema.pt
+- `checkpoints/last.ckpt` — 最后一轮
 
-## 3. 导出 + 固定评测
+## 3. 固定评测（在线直接用 .ckpt，无需导出）
 
 ```bash
-python examples/carKWS_offline/local/export_kws.py \
+python examples/carKWS_offline/local/eval_kws.py \
     --ckpt exp/logs/carKWS_SNN_KD/kd01/checkpoints/best-acc.ckpt \
     --ckpt-ema exp/logs/carKWS_SNN_KD/kd01/checkpoints/best-ema.ckpt
-
-python examples/carKWS_offline/local/eval_kws.py \
-    --ckpt exp/logs/carKWS_SNN_KD/kd01/checkpoints/export/best-acc.pt \
-    --ckpt-ema exp/logs/carKWS_SNN_KD/kd01/checkpoints/export/best-ema.pt
+# 也可评测历史格式：--ckpt alphasnn_29class_kd_rebuild_v2/experiment4/best-acc.pt
 ```
 
 ⚠️ 评测口径敏感：`num_buckets` 的 lhotse 默认是 10，必须 30（差 1~2pp 的历史教训）。
@@ -89,9 +88,9 @@ python examples/carKWS_offline/local/eval_kws.py \
 
 ## 4. 进入在线学习
 
-导出的 `export/best-ema.pt` 路径填入
-`examples/carKWS_online/conf/online_adakws.yaml` 的 `paths.pretrained_model`，
-见 `../carKWS_online/readme.md`。
+在线加载器**直接读 Lightning ckpt**（`best-ema.ckpt` 自动物化 EMA），
+把路径填入 `../carKWS_online/conf/online_adakws.yaml` 的 `paths.pretrained_model`
+（默认已指向 kd01 的 best-ema.ckpt），见 `../carKWS_online/readme.md`。
 
 ## 已知差异（相对 experiment4 重建版）
 

@@ -1,4 +1,8 @@
-"""YAML 配置加载与路径解析。"""
+"""在线/评测/导出的 YAML 配置加载与路径解析。
+
+产物目录与离线训练（Lightning）对齐：
+  exp/logs/<exp_name>/<version>/{log.log, hparams.yaml, tensorboard/, checkpoints/}
+"""
 
 import logging
 from pathlib import Path
@@ -8,15 +12,13 @@ from omegaconf import OmegaConf
 
 # 项目根目录 = AlphaSNN（框架根；utils → kws → asr → alpha → AlphaSNN）
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
-# 代码目录 = kws/online/（exp_dir 以此为基准解析）
-ONLINE_DIR = Path(__file__).resolve().parents[1] / "online"
 
 
 def load_config(config_path) -> AttributeDict:
     """加载 YAML 配置，返回 AttributeDict。
 
-    - 相对路径（exp_dir / 数据目录 / 模型路径）统一解析为基于 PROJECT_ROOT 的绝对路径
-    - exp_dir 每次运行会附加时间戳子目录
+    - root_dir/exp_dir = exp/logs/<system.exp_name>/<system.version>（与离线对齐）
+    - pretrained_model / manifest_dir 等相对路径以项目根 AlphaSNN 为基准
     """
     conf = OmegaConf.load(config_path)
     params = _to_attr_dict(OmegaConf.to_container(conf, resolve=True))
@@ -34,29 +36,22 @@ def _to_attr_dict(obj):
 
 
 def resolve_paths(params: AttributeDict) -> None:
-    """把配置中的相对路径解析为绝对路径。
-
-    - exp_dir：以 online/ 目录为基准
-    - 其余路径（pretrained_model / 数据目录）：以项目根 AlphaSNN 为基准
-    """
+    """把配置中的相对路径解析为绝对路径，并确定产物目录。"""
     sys = params.system
 
-    sys.exp_dir = _abs(sys.exp_dir, ONLINE_DIR)
+    exp_name = getattr(sys, 'exp_name', 'carKWS_online')
+    version = str(getattr(sys, 'version', 'online01'))
+    root_dir = PROJECT_ROOT / 'exp' / 'logs' / exp_name / version
+    sys.root_dir = root_dir
+    sys.exp_dir = root_dir  # 兼容既有引用（adakws_trainer 存档等）
+    sys.log_file = root_dir / getattr(sys, 'log_filename', 'log.log')
+
     params.paths.pretrained_model = _abs(params.paths.pretrained_model)
 
-    for key in ("fbank_dir", "manifest_dir"):
-        for part in ("source", "target"):
-            if part not in params.data:   # 纯 AdaKWS 配置已无 source 块
-                continue
-            node = params.data[part]
-            if key in node:
-                node[key] = _abs(node[key])
-
-    # 每次运行生成带时间戳的子目录
-    import datetime
-
-    run_ts = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    sys.exp_dir = sys.exp_dir / run_ts
+    node = params.data.target
+    for key in ('fbank_dir', 'manifest_dir'):
+        if key in node:
+            node[key] = _abs(node[key])
 
 
 def _abs(p, base=PROJECT_ROOT):
@@ -71,3 +66,15 @@ def log_config(params: AttributeDict) -> None:
     import json
 
     logging.info(json.dumps(params, default=str, indent=2, ensure_ascii=False))
+
+
+def dump_hparams(params: AttributeDict, out_path: Path) -> None:
+    """把运行配置快照写入 hparams.yaml（与离线 Lightning 产物结构对齐）。"""
+    import json
+
+    import yaml
+
+    plain = json.loads(json.dumps(params, default=str))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, 'w', encoding='utf-8') as f:
+        yaml.safe_dump(plain, f, allow_unicode=True, sort_keys=False)
