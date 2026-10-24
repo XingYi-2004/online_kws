@@ -1,0 +1,1 @@
+../../scripts/sugon_sbatch.sh

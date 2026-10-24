@@ -1,0 +1,133 @@
+name: SpeechMOS
+version: -2a
+
+system:
+  name: UnSE_MOS_GAN
+  exp_name: UnSE
+  debug: false
+  seed: 0
+  log_dir: exp/logs
+  train_and_test: true
+  gradient_clip_val: 5.0
+  valid_metric: true
+  valid_MOS: true
+  train_padding: true
+
+model:
+  name: UNet
+  param: UNet_6_64
+  mask: true
+  spec_data: false
+  mag_data: true
+  mag_decoder: true
+  spec_decoder: false
+  mask_bound: sigmoid
+  norm: instance
+  debug: ${system.debug}
+
+data:
+  name: WavDataset # default dataset class
+  pairs: noisy2clean # [noisy2clean, noisy2noisy, noisier2noisy]
+  data_dir: data
+  sample_rate: 16000
+  chunk_size: 317 # frames feed to network, 317: 2s, 637: 4s
+  filter: 0.90 # Keep the data of the middle 95% quantile duration, or with lower_bound and upper_bound
+  train:
+    name: WavDataset # WavDataset, OnlineNoisyDataset
+    noisy_store: train/noisy.flac.hdf5
+    noisy_csv: train/noisy.csv  # "wav_id,wav_path,duration,mos"
+    split_wav: false
+    filter: ${data.filter}
+  valid:
+    name: ${data.name}
+    noisy_store: ../../voicebank/data/train/noisy.flac.hdf5
+    noisy_csv: ../../voicebank/data/valid/valid.csv
+    clean_store: ../../voicebank/data/train/clean.flac.hdf5
+    clean_csv: ${data.valid.noisy_csv}
+    split_wav: false
+  test:
+    name: ${data.name}
+    noisy_store: ${data.valid.noisy_store}
+    noisy_csv: ../../voicebank/data/test/test.csv
+    clean_store: ${data.valid.clean_store}
+    clean_csv: ${data.test.noisy_csv}
+    split_wav: false
+  dataloader:
+    batch_size: 2
+    shuffle: true
+    num_workers: 8
+    pin_memory: false
+    prefetch_factor: 4
+    collate_fn: AudioCollateFn
+
+loss:
+  name: L1Loss
+  weight: 1
+
+# pytorch-lightning trainer
+trainer:
+  max_epochs: 10
+  log_every_n_steps: 100
+  val_check_interval: 0.25
+  strategy: ddp_find_unused_parameters_true # ddp or ddp_find_unused_parameters_true
+
+trainer_callbacks:
+  model_checkpoint:
+    monitor: valid_loss
+    mode: min
+    save_top_k: 3
+    save_last: true
+  early_stop: null
+
+optimizer:
+  generator: 
+    name: Adam
+    lr: 5e-5
+    betas: [0.8, 0.99]
+    # others, should be popped
+    lr_scheduler:
+      name: ExponentialLR
+      gamma: 0.999      
+  discriminator:
+    name: Adam
+    lr: 1e-4
+    betas: [0.8, 0.99]
+    # others, should be popped
+    lr_scheduler:
+      name: ExponentialLR
+      gamma: 0.999
+
+stft:
+  name: torch # torch or filterbank
+  n_fft: 512
+  win_length: 400
+  hop_length: 100
+
+# ===== GAN =====
+d_model:
+  n_critic: 5
+  name: ResNetDiscriminator
+  ResNet: Res2Net
+  feat_dim: 257
+  embedding_size: 192
+  out_size: 1
+
+# ===== others =====
+pool:
+  name: ThreadPoolExecutor # ThreadPoolExecutor or ProcessPoolExecutor
+  max_workers: null
+
+DNSMOS:
+  model_path: tools/DNSMOS/DNSMOS/sig_bak_ovr.onnx # prefix $MAIN_ROOT
+  providers: auto
+  torch_worker: true
+  norm: True
+  metric: OVL # SIG, BAK, OVL, ALL
+
+deepfilter:
+  n_filter_f: 3 # frequency, 3
+  n_filter_t: 5 # time, 5
+  n_filter_c: 16 # channel, 16
+  complex: false
+  expand: SPConv
+  method: filtering # masking, filtering

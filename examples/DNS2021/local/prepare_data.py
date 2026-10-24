@@ -1,0 +1,1 @@
+../../voicebank/local/prepare_data.py

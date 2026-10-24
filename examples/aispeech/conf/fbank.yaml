@@ -1,0 +1,10 @@
+window_type: hamming
+sample_frequency: 16000
+low_freq: 0
+high_freq: 8000
+dither: 0.001
+num_mel_bins: 40
+htk_compat: true
+frame_length: 25
+frame_shift: 10
+snip_edges: false

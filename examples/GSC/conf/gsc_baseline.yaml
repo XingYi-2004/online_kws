@@ -1,0 +1,195 @@
+# Original SpikeCommander paper reproduction on the GSC dataset.
+#
+# All model parameters below are translated from `best_config_gsc.py`
+# in the paper's open-source release, while keeping the current
+# Lightning + SpikeDataset routing layout.
+#
+#   dataset     : 'gsc'                  (35 classes)
+#   frontend    : log-mel spectrograms   (140 bins, window=256, hop=80)
+#   depths      : 2 backbone blocks
+#   hidden_dim  : 256
+#   num_heads   : 16
+#   attention_window : 20
+#   lif neurons : v_th=1.0, v_reset=0.5, tau=2.0, surrogate=ATan(alpha=5.0)
+#   optimizer   : AdamW(lr=0.002, weight_decay=0.005)
+#   scheduler   : CosineAnnealingLR(T_max=40)
+#   epochs      : 300
+#   batch_size  : 256
+#   loss        : sum-pooled spike counts -> CrossEntropy
+#
+# Run with the SpeechCommands dataset stored in the path from
+# `data.gsc.root` (default: <repo>/data/gsc).
+
+name: gsc
+version: -baseline
+
+system:
+  name: SpikeASR
+  exp_name: SpikeCommander
+  debug: false
+  seed: 312
+  log_dir: exp/logs
+
+model:
+  name: SpikeCommander
+  mask: false
+  debug: ${system.debug}
+  param:
+    # ---- general ----
+    debug: ${system.debug}
+    dataset: gsc
+
+    # ---- spiking neuron ----
+    spike_mode: lif
+    init_tau: 2.0
+    v_threshold: 1.0
+    v_reset: 0.5
+    alpha: 5.0
+    detach_reset: true
+    backend: cupy
+
+    # ---- dataset / model shape ----
+    n_inputs: 140
+    n_hidden_neurons: 256
+    n_outputs: 35
+    num_heads: 16
+    depths: 2
+    hidden_dims: 1024
+    kernel_size: 31
+
+    # ---- spiking attention / routing ----
+    attention_window: 20
+
+    # ---- dropout / regularization ----
+    use_bn: true
+    use_dp: true
+    use_dw_bias: false
+    dropout_l: 0.1
+    dropout_p: 0.1
+
+    # ---- frontend ----
+    window_size: 256
+    hop_length: 80
+    n_mels: 140
+    t_max: 40
+
+data:
+  name: SpikeDataset
+  data_dir: data
+  dataset_type: map
+
+  sample_rate: 16000
+  use_spike_input: true
+  valid_batch_size: ${data.dataloader.batch_size}
+  test_batch_size: ${data.dataloader.batch_size}
+
+  spike:
+    name: gsc
+
+  gsc:
+    download: false
+    sample_rate: 16000
+    window_size: 256
+    hop_length: 80
+    n_mels: 140
+    f_min: 50
+    f_max: 14000
+    resample_rate: 8000
+    use_aug: true
+    # Global noise augmentation parameters
+    noise_aug:
+      enabled: false # off in training stage
+      noise_type: gaussian  # wav | gaussian
+      p: 1.0
+      noise_csv: null
+      noise_store: null
+      snr_lower: 0
+      snr_upper: 0
+      target_level_lower: -35
+      target_level_upper: -15
+      seed: ${system.seed}
+    # -- following are spectrum augmentation parameters --
+    speed_rates: [0.5, 1.5]
+    speed_p: 0.5
+    mF: 1
+    F: 10
+    mT: 1
+    pS: 0.25
+
+  train:
+    name: ${data.name}
+    gsc:
+      root: gsc
+
+  valid:
+    name: ${data.name}
+    gsc:
+      root: gsc
+
+  test:
+    name: ${data.name}
+    gsc:
+      root: gsc
+      # Test-only noise can be enabled here or via CLI, e.g.
+      # noise_aug:
+      #   enabled: true
+      #   noise_type: gaussian
+      #   snr_lower: 0
+      #   snr_upper: 0
+
+  dataloader:
+    batch_size: 256
+    shuffle: true
+    num_workers: 4
+    pin_memory: false
+    prefetch_factor: 2
+    collate_fn: PadSequenceCollateFn
+
+  data_augment: null
+
+loss:
+  name: SpikingCELoss
+  time_reduce: sum
+  label_smoothing: 0.0
+
+trainer:
+  max_epochs: 300
+  gradient_clip_val: 5.0
+  log_every_n_steps: 100
+  strategy: ddp_find_unused_parameters_true
+  sync_batchnorm: true
+  precision: 32
+  benchmark: true
+
+trainer_callbacks:
+  model_checkpoint:
+    monitor: valid/acc
+    mode: max
+    save_top_k: 3
+    save_last: true
+    auto_insert_metric_name: false
+    filename: "epoch={epoch:03d}-step={step}-val_acc={valid/acc:.4f}"
+  progress_logger: true
+
+optimizer:
+  name: AdamW
+  lr: 0.002
+  weight_decay: 0.005
+  betas: [0.9, 0.999]
+  lr_scheduler:
+    name: CosineAnnealingLR
+    T_max: 40
+    eta_min: 1.0e-5
+
+stft:
+  n_fft: 256
+  win_length: 256
+  hop_length: 80
+  window: hann
+  center: true
+  normalized: false
+  onesided: true
+  power: null
+
+pool:
+  max_workers: 4

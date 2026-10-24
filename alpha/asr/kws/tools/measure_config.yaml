@@ -1,0 +1,181 @@
+# ============================================================
+# FLOPs / SOPs / Energy 测量配置
+#
+# 使用方法:
+#   1. 在 models 列表里取消注释你想测的条目（或复制一份改路径）
+#   2. 填写 checkpoint 路径 + test_data 信息
+#   3. 运行: python scripts/measure_efficiency.py
+#
+# 每条语音用自己的实际帧数 forward，跑完整个测试集取平均。
+# checkpoint 路径 = null 的条目会被自动跳过。
+# ============================================================
+
+# ---- 公共设置 ----
+input:
+  batch_size: 1
+  feature_dim: 80
+  max_samples: 100   # 每个模型随机抽 100 条测量
+
+# ---- 待测模型列表（按需取消注释 / 修改路径）----
+models:
+  # ╔══════════════════════════════════════════════════════════════╗
+  # ║  四种 model type                                            ║
+  # ╠══════════════════════════════════════════════════════════════╣
+  # ║  tdnnlstm     → TdnnLstm (ANN)                             ║
+  # ║  tdnnsnn      → TdnnSNN                                    ║
+  # ║  skipconvnext → SpikConvNext                               ║
+  # ║  alphasnn     → MultiTauLIFCommander (需额外填 config)    ║
+  # ╠══════════════════════════════════════════════════════════════╣
+  # ║  test_data 两种格式:                                        ║
+  # ║                                                             ║
+  # ║  ① memmap — 预提取 FBank 特征 (.dat + .idx)                ║
+  # ║    format: memmap                                           ║
+  # ║    feature_file: data/fbank/command_feats_test.dat    ← 必填║
+  # ║    index_file:   data/fbank/command_feats_test.idx    ← 必填║
+  # ║                                                             ║
+  # ║  ② lhotse — Lhotse CutSet 清单 (.jsonl.gz)                  ║
+  # ║    format: lhotse                                           ║
+  # ║    manifest: data/fbank/command_cuts_test_29.jsonl.gz ← 必填║
+  # ╚══════════════════════════════════════════════════════════════╝
+
+  # ============================================================
+  # 示例 1: TdnnLstm (ANN)
+  # num_class          : 分类数（影响最后一层 Linear 维度）
+  # subsampling_factor : Conv1d stride 降采样倍率（默认 3）
+  # ============================================================
+  - name: "TdnnLstm-41class"
+    type: tdnnlstm
+    checkpoint: /home/huxixiang20040727/SNN_online_learn/online_kws/SNN_aol/tdnn_lstm_6ann_768_tts/exp/pretrained.pt
+    num_class: 41
+    subsampling_factor: 3
+    test_data:
+      format: lhotse
+      manifest: /home/huxixiang20040727/SNN_online_learn/online_kws/AlphaSNN/data/fbank/command_cuts_test.jsonl
+
+  # ============================================================
+  # 示例 2: TdnnSNN
+  # ============================================================
+  - name: "TdnnSNN-41class"
+    type: tdnnsnn
+    checkpoint: /home/huxixiang20040727/SNN_online_learn/online_kws/SNN_aol/tdnn_lstm_6snn_768_tts/exp/pretrained.pt
+    num_class: 41
+    subsampling_factor: 3
+    test_data:
+      format: lhotse
+      manifest: /home/huxixiang20040727/SNN_online_learn/online_kws/AlphaSNN/data/fbank/command_cuts_test.jsonl
+
+  # ============================================================
+  # 示例 3: SkipConvNext
+  # 不需要 subsampling_factor（模型内部自行处理）
+  # ============================================================
+  - name: "SkipConvNext-41class"
+    type: skipconvnext
+    checkpoint: /home/huxixiang20040727/SNN_online_learn/online_kws/SNN_aol/skipconvnext_41class/2026-07-19_22-17-01/best-acc.pt
+    num_class: 41
+    test_data:
+      format: memmap
+      feature_file: data/fbank/command_feats_test.dat
+      index_file: data/fbank/command_feats_test.idx
+
+  # ============================================================
+  # 示例 4: MultiTauLIFCommander (AlphaSNN)
+  # 必填 config，脚本会从 checkpoint 推断实际参数
+  # ============================================================
+  - name: "MultiTauLIFCommander-41class"
+    type:  alphasnn 
+    config: offline/conf/multitau_41class.yaml
+    checkpoint: /home/huxixiang20040727/SNN_online_learn/online_kws/SNN_aol/alphasnn_41class/2026-07-26_22-08-11/best-acc.pt
+    test_data:
+      format: memmap
+      feature_file: data/fbank/command_feats_test.dat
+      index_file: data/fbank/command_feats_test.idx
+
+  # ============================================================
+  # 29 类中文车载语音
+  # ============================================================
+  - name: "TdnnLstm-29class"
+    type: tdnnlstm
+    checkpoint: /home/huxixiang20040727/SNN_online_learn/online_kws/AlphaSNN/data_source/tdnn_lstm_6ann_768_new2/exp/pretrained.pt
+    num_class: 29
+    subsampling_factor: 3
+    test_data:
+      format: lhotse
+      manifest: data/fbank/command_cuts_test_29.jsonl
+
+  - name: "TdnnSNN-29class"
+    type: tdnnsnn
+    checkpoint: /home/huxixiang20040727/SNN_online_learn/online_kws/SNN_aol/tdnn_lstm_6snn_new9/exp/pretrained.pt
+    num_class: 29
+    subsampling_factor: 3
+    test_data:
+      format: lhotse
+      manifest: data/fbank/command_cuts_test_29.jsonl
+
+  - name: "MultiTauLIFCommander-29class-KD"
+    type: alphasnn
+    config: offline/conf/multitau_29class_kd.yaml
+    checkpoint: /home/huxixiang20040727/SNN_online_learn/online_kws/AlphaSNN/alphasnn_29class/2026-08-04_13-10-57/best-acc.pt
+    test_data:
+      format: lhotse
+      manifest: data/fbank/command_cuts_test_29.jsonl
+
+  - name: "SkipConvNext-29class-KD"
+    type: skipconvnext
+    checkpoint: /home/huxixiang20040727/SNN_online_learn/online_kws/SNN/SkipConvNext/checkpoints/command-29/spikconvnext||seed=312||command_29||2depths||bins=80||lr_w=0.002||KD_Best_ACC_2026-08-13_09-49-06.pt
+    num_class: 29
+    test_data:
+      format: lhotse
+      manifest: data/fbank/command_cuts_test_29.jsonl
+
+  # ============================================================
+  # GSC 35 类
+  # test_data format=gsc: torchaudio on-the-fly FBank 提取
+  #   root:   GSC 数据集根目录（含 SpeechCommands/ 子目录）
+  #   n_mels: FBank 维度（80 或 140）
+  # ============================================================
+  - name: "TdnnLstm-GSC35"
+    type: tdnnlstm
+    checkpoint: /home/huxixiang20040727/SNN_online_learn/online_kws/SNN/ann_checkpoint/ann_v2_35class/best_model.pt
+    num_class: 35
+    subsampling_factor: 3
+    test_data:
+      format: data_list
+      manifest: speech_commands_v2/data/test/data.list
+      n_mels: 80
+
+  - name: "TdnnSNN-GSC35"
+    type: tdnnsnn
+    checkpoint: /home/huxixiang20040727/SNN_online_learn/online_kws/SNN/snn_checkpoint/snn_v2_35class/best_model.pt  # TODO: 训练 35 类版本后填路径
+    num_class: 35
+    subsampling_factor: 3
+    test_data:
+      format: data_list
+      manifest: speech_commands_v2/data/test/data.list
+      n_mels: 80
+
+  - name: "SkipConvNext-GSC35"
+    type: skipconvnext
+    checkpoint: /home/huxixiang20040727/SNN_online_learn/online_kws/SNN/SkipConvNext/checkpoints/gsc-17/spikconvnext||seed=3407||gsc||2depths||256ms||bins=80||lr_w=0.002||heads=16_Best_ACC_2026-07-12_13-17-12.pt
+    num_class: 35
+    test_data:
+      format: data_list
+      manifest: speech_commands_v2/data/test/data.list
+      n_mels: 140
+
+  - name: "MultiTauLIFCommander-GSC35-small"
+    type: alphasnn
+    config: AlphaSNN/examples/GSC/conf/spike_memory.yaml
+    checkpoint: /home/huxixiang20040727/SNN_online_learn/online_kws/SNN_aol/alphasnn_gsc35/2026-08-12_00-55-13/epoch-293.pt
+    test_data:
+      format: data_list
+      manifest: speech_commands_v2/data/test/data.list
+      n_mels: 80
+
+  - name: "MultiTauLIFCommander-GSC35-large"
+    type: alphasnn
+    config: AlphaSNN/examples/GSC/conf/spike_memory.yaml
+    checkpoint: /home/huxixiang20040727/SNN_online_learn/online_kws/SNN_aol/alphasnn_gsc35/2026-08-12_14-57-33/epoch-243.pt
+    test_data:
+      format: data_list
+      manifest: speech_commands_v2/data/test/data.list
+      n_mels: 80

@@ -1,0 +1,167 @@
+# Original SpikeCommander paper reproduction on the SSC dataset.
+#
+# All model parameters below are translated from `best_config_ssc.py`
+# in the paper's open-source release, while keeping the current
+# Lightning + SpikeDataset routing layout.
+#
+#   dataset     : 'ssc'                  (35 classes)
+#   time_step   : 10 ms
+#   n_bins      : 5                      (5 bins => 700/5 = 140 input channels)
+#   depths      : 1 backbone block
+#   hidden_dim  : 256
+#   num_heads   : 16
+#   attention_window : 20
+#   lif neurons : v_th=1.0, v_reset=0.5, tau=2.0, surrogate=ATan(alpha=5.0)
+#   optimizer   : AdamW(lr=0.005, weight_decay=0.01)
+#   scheduler   : CosineAnnealingLR(T_max=40)
+#   epochs      : 300
+#   batch_size  : 256
+#   loss        : sum-pooled spike counts -> CrossEntropy
+#
+# Run with the SSC dataset downloaded to the path stored in
+# `data.ssc.root` (default: <repo>/data/ssc).
+
+name: ssc
+version: -baseline
+
+system:
+  name: SpikeASR
+  exp_name: SpikeCommander
+  debug: false
+  seed: 312
+  log_dir: exp/logs
+
+model:
+  name: SpikeCommander
+  mask: false
+  debug: ${system.debug}
+  param:
+    # ---- general ----
+    debug: ${system.debug}
+    dataset: ssc
+
+    # ---- spiking neuron ----
+    spike_mode: lif
+    init_tau: 2.0
+    v_threshold: 1.0
+    v_reset: 0.5
+    alpha: 5.0
+    surrogate: atan
+    detach_reset: true
+    backend: cupy
+
+    # ---- dataset / model shape ----
+    n_inputs: 140
+    n_hidden_neurons: 256
+    n_outputs: 35
+    num_heads: 16
+    depths: 1
+    hidden_dims: 1024       # 4x of n_hidden_neurons from mlp_ratio=4
+    kernel_size: 31
+
+    # ---- spiking attention / routing ----
+    attention_window: 20
+
+    # ---- dropout / regularization ----
+    use_bn: true
+    use_dp: true
+    use_dw_bias: false
+    dropout_l: 0.1
+    dropout_p: 0.1
+
+    # ---- time / binning ----
+    time_step: 10
+
+data:
+  name: SpikeDataset
+  data_dir: data
+  dataset_type: map
+
+  sample_rate: 16000
+  use_spike_input: true
+  valid_batch_size: ${data.dataloader.batch_size}
+  test_batch_size: ${data.dataloader.batch_size}
+
+  spike:
+    name: ssc
+
+  ssc:
+    n_bins: 5
+    data_type: frame
+    time_step: 10
+    use_aug: true
+    TN_mask_aug_proba: 0.5
+    time_mask_proportion: 0.1
+    neuron_mask_size: 10
+
+  train:
+    name: ${data.name}
+    ssc:
+      root: ssc
+
+  valid:
+    name: ${data.name}
+    ssc:
+      root: ssc
+
+  test:
+    name: ${data.name}
+    ssc:
+      root: ssc
+
+  dataloader:
+    batch_size: 256
+    shuffle: true
+    num_workers: 4
+    pin_memory: false
+    prefetch_factor: 2
+    collate_fn: PadSequenceCollateFn
+
+  data_augment: null
+
+loss:
+  name: SpikingCELoss
+  time_reduce: sum
+  label_smoothing: 0.0
+
+trainer:
+  max_epochs: 300
+  gradient_clip_val: 5.0
+  log_every_n_steps: 100
+  strategy: ddp_find_unused_parameters_true
+  sync_batchnorm: true
+  precision: 32
+  benchmark: true
+
+trainer_callbacks:
+  model_checkpoint:
+    monitor: valid/acc
+    mode: max
+    save_top_k: 3
+    save_last: true
+    auto_insert_metric_name: false
+    filename: "epoch={epoch:03d}-step={step}-val_acc={valid/acc:.4f}"
+  progress_logger: true
+
+optimizer:
+  name: AdamW
+  lr: 0.005
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+  lr_scheduler:
+    name: CosineAnnealingLR
+    T_max: 40
+    eta_min: 1.0e-5
+
+stft:
+  n_fft: 512
+  win_length: 400
+  hop_length: 160
+  window: hann
+  center: true
+  normalized: false
+  onesided: true
+  power: null
+
+pool:
+  max_workers: 4

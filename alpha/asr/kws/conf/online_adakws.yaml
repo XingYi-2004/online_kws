@@ -1,0 +1,152 @@
+# ============================================================================
+# 在线学习（AdaKWS 测试时适应）训练配置
+# ============================================================================
+# 纯 AdaKWS：目标域无标签，只更新 BatchNorm affine 参数（4608 个）。
+# 历史上的 DA（DANN/CDAN）、SPACE、伪标签 OCL 及教师/记忆库/回放/BCT 等叠加
+# 组件均已随实验清理（验证均无收益），记录见 SNN_aol/README.md 的 DA-MT 系列
+# 与 ONLINE_LEARNING_HANDOFF.md。
+#
+# 所有训练配置都在此文件修改，启动命令：
+#   cd AlphaSNN && python -m alpha.asr.kws.online.train_adakws
+#
+# 相对路径解析基准：exp_dir 以 online/ 目录为基准，其余路径以项目根 SNN_aol 为基准。
+# ============================================================================
+
+# ═══════════════════════════════════════════════════════════════
+#  系统设置
+# ═══════════════════════════════════════════════════════════════
+system:
+  # 实验输出目录（相对 online/ 目录）。每次运行自动生成时间戳子目录：
+  #   online/train.log/<时间戳>/log-train-<时间戳>   日志
+  #   online/train.log/<时间戳>/init-model.pt        适应前初始模型
+  #   online/train.log/<时间戳>/best-adakws.pt       无监督评分最佳模型
+  exp_dir: train.log
+  log_filename: log-train
+  cuda_visible_devices: "0"
+  world_size: 1                # 单卡训练
+  master_port: 12354           # DDP 主端口（world_size>1 时用）
+  seed: 42                     # 随机种子
+  log_interval: 10             # 每 N 个 batch 打印一次日志
+  tensorboard: false           # 是否启用 TensorBoard
+
+
+# ═══════════════════════════════════════════════════════════════
+#  路径
+# ═══════════════════════════════════════════════════════════════
+paths:
+  # 预训练模型（重建版 raw：干净测试集 98.04%，experiment4/E224）。
+  # ⚠️ 全仓库加载链路统一用 weights_only=True（更安全的反序列化白名单模式）；
+  #    若要改回 KD-MT-08 原版 checkpoint（内含 PosixPath，白名单默认拒绝），
+  #    需把 train_utils/eval_multitau 的 weights_only 改回 False 或重加白名单。
+   pretrained_model: /home/huxixiang20040727/SNN_online_learn/online_kws/AlphaSNN/alphasnn_29class_kd_rebuild_v2/experiment4/best-ema.pt
+
+
+# ═══════════════════════════════════════════════════════════════
+#  模型架构
+#  ⚠️ 键名与键值与预训练 checkpoint 一一对应，除 n_outputs/亚军对齐需求外
+#     不要改动（加载走键映射 model.* → backbone.*）。
+# ═══════════════════════════════════════════════════════════════
+model:
+  name: MultiTauLIFCommander
+
+  # ---- 通用 ----
+  backend: cupy               # 后端 cupy（CUDA kernel 加速，比 torch 快 10-30%）
+
+  # ---- 脉冲神经元（LIF）----
+  spike_mode: lif
+  init_tau: 2.0                # LIF 初始时间常数
+  v_threshold: 1.0             # 放电阈值
+  surrogate: atan              # 代理梯度函数（atan 唯一支持）
+  surrogate_alpha: 2.0         # 代理梯度平滑系数（越大越接近阶跃）
+  detach_reset: true           # 复位操作脱离计算图（稳定 BPTT 梯度）
+  decay_input: true            # 输入电流按 1/tau 缩放
+
+  # ---- 输入 / 输出维度 ----
+  n_inputs: 80                 # 特征维度（80-dim FBank）
+  n_hidden_neurons: 384        # 隐藏层维度（对齐预训练 checkpoint）
+  n_outputs: 29                # 类别数（29 类中文车载指令）
+  depths: 5                    # MultiTauBlock 层数（对齐预训练 checkpoint）
+
+  # ---- 多时间常数记忆（核心创新）----
+  taus: [5.0, 20.0, 100.0]     # 多时间常数
+  learnable_alpha: false       # 固定 tau
+  memory_mode: soft            # 软复位：放电后保留残余电位
+  branch_fusion_mode: channel_adaptive
+
+  # ---- 前端：声学特征预处理 ----
+  frontend_type: see_lite      # see_lite: 卷积+LIF / linear: 纯线性投影
+  frontend_kernel_size: 7      # 深度可分离卷积核大小（须为奇数）
+  frontend_dilation: 1         # 空洞卷积膨胀率
+  frontend_pw_bias: true       # 逐点卷积是否使用 bias
+  frontend_dw_bias: false      # 深度卷积是否使用 bias
+
+  # ---- 通道混合器（MultiTauLIFMemory 之后的通道间信息交换）----
+  channel_mixer_type: conv     # conv: 瓶颈卷积 + LIF + 残差
+
+  # linear 专用
+  channel_mixer_bias: true
+
+  # light-conv 专用
+  channel_mixer_groups: 4
+  channel_mixer_light_bias: false
+
+  # conv 专用（瓶颈卷积）
+  channel_mixer_bottleneck_ratio: 4   # 瓶颈压缩比（dim/4）
+  channel_mixer_kernel_size: 5        # 时序卷积核大小（须为奇数）
+  channel_mixer_dilation: 1           # 空洞卷积膨胀率
+  channel_mixer_norm_groups: 8        # GroupNorm 分组数
+
+  # ---- 输出 ----
+  return_sequence_logits: false       # 固定使用池化后 logits [N, C]
+  head_bias: false                    # 分类头是否使用 bias
+
+  # ---- 正则化 ----
+  norm_type: bn                # 归一化类型（bn: BatchNorm / ln: LayerNorm / none）
+  use_dp: true                 # 启用 Dropout
+  dropout_l: 0.2               # Dropout 丢弃比例
+
+  # ---- 输入降采样（time-domain）----
+  subsampling_factor: 2        # AvgPool1d 步长（对齐预训练 checkpoint）
+
+
+# ═══════════════════════════════════════════════════════════════
+#  数据配置（目标域 = 测试集，无标签参与适应）
+#  适配/评测加载器统一用固定 batch（build_adakws_dataloader）：
+#  按时长升序排序 + 每批固定 adakws_batch_size 条，初始/最终精度同口径。
+# ═══════════════════════════════════════════════════════════════
+data:
+  # 无 RIR 子目标域（409 真实车载 + 662 加噪 simu = 1071 条；
+  # 标准 1428 条清单为 command_cuts_test_29.jsonl）
+  target:
+    manifest_dir: /home/huxixiang20040727/SNN_online_learn/online_kws/AlphaSNN/data_train/fbank
+    cuts_file: command_cuts_test_29_no_rir.jsonl    # 目标域 cuts 清单
+    on_the_fly_feats: false                  # false=用预计算特征
+    test_num_workers: 8                      # 评测/适应 dataloader 进程数
+
+
+# ═══════════════════════════════════════════════════════════════
+#  在线学习（AdaKWS）
+# ═══════════════════════════════════════════════════════════════
+online:
+  method: adakws               # 仅支持 adakws（历史方法已清理）
+  num_iterations: 10
+  grad_clip: 5.0               # 梯度裁剪阈值
+
+  # ---- AdaKWS 参数 ----
+  adakws_batch_size: 128
+  adakws_steps: 1
+  adakws_entropy_threshold: 0.3  # ⚠️ 90.20% 冠军值（2026-10-19 运行日志核对）；0.4 曾跑出 88.42%
+  adakws_pkc_threshold: 0.05
+  adakws_sigma: 0.5              # 样本权重归一化因子
+  adakws_temperature: 1.0        # 熵计算温度
+  adakws_optimizer: adam         # sgd / adam
+  adakws_lr: 2.2e-3
+  adakws_momentum: 0.9           # SGD momentum
+  adakws_nesterov: true          # SGD Nesterov 加速
+  adakws_weight_decay: 0.0
+  adakws_bn_mode: train_running  # no_running / train_running / checkpoint_running
+  adakws_update_scope: bn_affine # 更新范围：bn_affine / bn_gn_affine / bn_classifier / last_block_classifier
+  adakws_time_mask: 20           # 时域遮罩最大宽度（帧）
+  adakws_freq_mask: 5            # 频域遮罩最大宽度（频带）
+  adakws_num_time_masks: 2
+  adakws_num_freq_masks: 2

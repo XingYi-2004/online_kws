@@ -1,0 +1,22 @@
+QFSMN_R:  
+  ninp: 200
+  nhid: 448
+  nproj: 120
+  nvocab: 122
+  skip: none
+  nlayer: 9
+  nlayer_add: 3
+  ndnn: 0
+  lo: 10
+  lo_add: 10
+  ro: 0
+  ro_add: 1
+  ls: 1
+  rs: 1
+  activation: relu2
+  clip_weight: 1
+  freeze : 0
+  frz_nlayer : 5
+  q_schema: q4
+  input_highq: false
+  quant_noise: 0

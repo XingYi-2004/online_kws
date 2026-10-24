@@ -1,0 +1,131 @@
+# FBank feature online
+name: aispeech
+version: -5a
+
+system:
+  name: LiteASR
+  exp_name: ${system.name}
+  debug: false
+  seed: 0
+  log_dir: exp/logs
+
+model:
+  name: QFSMN_R
+  param: FSMN.yaml
+  init: /public/share/kaitao_mu/sharedata/aispeech/corpus/yuntai/model/init_models/YT2228-cn-q4_fsmnr_lay12_lo10_ro3-1370k.ckpt
+  debug: ${system.debug}
+
+data:
+  name: FeatLabelDataset # default dataset class
+  pairs: noisy2clean # [noisy2clean, noisy2noisy, noisier2noisy]
+  data_dir: data
+  sample_rate: 16000
+  chunk_size: 637 # frames feed to network, 317: 2s, 637: 4s
+  n_split: 8
+  units: units/units_phn121.txt
+  filter: 0.95 # Keep the data of the middle 95% quantile duration, or with lower_bound and upper_bound
+  feats:
+    skip_frame: 4
+    splice: [2,2]
+    transform: transform/final.200.feature_transform.vad.torch
+    extractor: torchaudio # kaldifeat or torchaudio
+    mask_padding: true
+    padding_value: 1.192e-07
+  train:
+    name: WavTextDataset # WavTextDataset or WavDataset
+    noisy_store: 
+      - train/cn_fan_Midea-XiDun_augment_noisy.flac.hdf5
+      - train/common_32w/AISHELL-1_32w_noisy.flac.hdf5
+    noisy_csv: 
+      - train/cn_fan_Midea-XiDun_augment_noisy.flac.csv # "wav_id,wav_path,duration,text"
+      - train/AISHELL-1_32w_noisy.csv
+    clean_store: null
+    clean_csv: null
+    split_wav: false
+    filter: ${data.filter}
+  valid:
+    name: ${data.name}
+    noisy_store: null
+    noisy_csv: null
+    clean_store: null
+    clean_csv: null
+    split_wav: false
+    feats_store: valid/cn_fan_Midea-XiDun.feats.hdf5
+    feats_csv: valid/cn_fan_Midea-XiDun.feats.csv
+    label_store: valid/cn_fan_Midea-XiDun.label.hdf5
+    label_csv: valid/cn_fan_Midea-XiDun.label.csv
+  test:
+    name: ${data.name}
+    noisy_store: test/cn_fan_Midea-XiDun.flac.hdf5
+    noisy_csv: test/cn_fan_Midea-XiDun.csv
+    clean_store: null
+    clean_csv: null
+    split_wav: false
+  dataloader:
+    batch_size: 400
+    shuffle: true
+    num_workers: 8
+    pin_memory: false
+    prefetch_factor: 16
+    persistent_workers: true
+    collate_fn: AudioCollateFn
+  valid_batch_size: ${data.dataloader.batch_size}
+  
+loss:
+  name: CTCLoss
+
+# pytorch-lightning trainer
+trainer:
+  max_epochs: 25
+  # gradient_clip_val: 5.0
+  log_every_n_steps: 100
+  strategy: ddp
+
+trainer_callbacks:
+  model_checkpoint:
+    monitor: ${optimizer.monitor}
+    mode: min
+    save_top_k: 3
+    save_last: true
+  early_stop:
+    monitor: ${optimizer.monitor}
+    mode: ${trainer_callbacks.model_checkpoint.mode}
+    patience: 7
+    verbose: true
+
+optimizer:
+  monitor: valid/asr_loss
+  # name: SGD
+  # lr: 5e-07
+  # momentum: 0.9
+  # weight_decay: 0.01
+  # nesterov: false  
+  # lr_scheduler:
+  #   name: KaldiLRScheduler
+  #   warmup_round: 0
+  name: Adam
+  lr: 1e-4
+  weight_decay: 0.01
+  lr_scheduler:
+    name: ReduceLROnPlateau
+    factor: 0.5
+    patience: 3
+
+stft:
+  name: torch # torch or filterbank
+  n_fft: 512
+  win_length: 400
+  hop_length: 100
+
+# ===== others =====
+pool:
+  name: ThreadPoolExecutor
+  max_workers: null
+
+deepfilter:
+  n_filter_f: 3 # frequency
+  n_filter_t: 5 # time
+  n_filter_c: 16 # channel
+  complex: false
+  expand: SPConv
+  method: filtering # masking, filtering

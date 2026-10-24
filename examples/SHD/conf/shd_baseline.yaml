@@ -1,0 +1,188 @@
+# Original SpikeCommander paper reproduction on the SHD dataset.
+#
+# All model parameters below are translated from `best_config_shd.py`
+# in the paper's open-source release.
+#
+#   dataset     : 'shd'                  (20 classes)
+#   time_step   : 10 ms                  (SHD native binning)
+#   n_bins      : 5                      (5 bins => 700/5 = 140 input channels)
+#   depths      : 1 backbone block
+#   hidden_dim  : 128
+#   num_heads   : 8
+#   attention_window : 20
+#   lif neurons : v_th=1.0, v_reset=0.5, tau=2.0, surrogate=ATan(alpha=5.0)
+#   optimizer   : AdamW(lr=0.01, weight_decay=0.01)
+#   epochs      : 500
+#   batch_size  : 256
+#   loss        : sum-pooled spike counts -> CrossEntropy
+#
+# Run with the SHD dataset downloaded to the path stored in
+# `data.shd.root` (default: <repo>/data/shd).
+
+name: shd
+version: -baseline
+
+system:
+  name: SpikeASR
+  exp_name: SpikeCommander
+  debug: false
+  seed: 312
+  log_dir: exp/logs
+
+model:
+  name: SpikeCommander
+  mask: false   # spiking models do not need a masking head
+  debug: ${system.debug}
+  # SpikeCommander takes a single `config` namespace.  All fields below are
+  # consumed by the SEE front-end, the MSTASA backbone and the SCR-MLP.
+  param:
+    # ---- general ----
+    debug: ${system.debug}
+    dataset: shd
+
+    # ---- spiking neuron ----
+    spike_mode: lif
+    init_tau: 2.0
+    v_threshold: 1.0
+    v_reset: 0.5
+    alpha: 5.0
+    surrogate: atan          # resolved to surrogate.ATan(alpha=alpha) by SpikeASR
+    detach_reset: true
+    backend: cupy            # set to "torch" if cupy is unavailable
+
+    # ---- dataset / model shape ----
+    n_inputs: 140            # 700 channels / 5 bins
+    n_hidden_neurons: 128    # single hidden dim (was n_hidden_neurons_list=[128])
+    n_outputs: 20            # 20 SHD classes
+    num_heads: 8
+    depths: 1
+    hidden_dims: 256         # SCR-MLP hidden dim (4x of n_hidden_neurons)
+    kernel_size: 31
+
+    # ---- spiking attention ----
+    attention_window: 20
+
+    # ---- dropout / regularization ----
+    use_bn: true
+    use_dp: true
+    use_dw_bias: false
+    dropout_l: 0.1
+    dropout_p: 0.1
+
+    # ---- time / binning ----
+    time_step: 10            # ms, used by MSTASA global attention
+    n_bins: 5                # for documentation; SpikeDataset reads from data.shd.n_bins
+    t_max: 40
+    max_len: 126
+    use_padding: false
+    init_w_method: kaiming_uniform
+
+data:
+  name: SpikeDataset
+  data_dir: data
+  dataset_type: map         # use modules.dataset.dataset_map
+
+  sample_rate: 16000        # SHD is event-based, this is only metadata
+  use_spike_input: true     # disable FeatExtract path in BaseModule
+  valid_batch_size: ${data.dataloader.batch_size}
+  test_batch_size: ${data.dataloader.batch_size}
+
+  # Select the concrete adapter without coupling the dataset layer to model.param.
+  spike:
+    name: shd               # shd | ssc | gsc
+
+  # SHD-specific arguments consumed by the routed SHDDataset.
+  # `data_type=frame` reads the pre-binned .npz frames shipped with the
+  # local SpikingJelly backport. SpikeDataset currently supports frame only.
+  shd:
+    n_bins: 5
+    data_type: frame
+    time_step: 10
+    use_aug: true
+    # TimeNeuronsMaskAug config (matches the paper's `aug` settings)
+    TN_mask_aug_proba: 0.5
+    time_mask_proportion: 0.2
+    neuron_mask_size: 20
+
+  train:
+    name: ${data.name}
+    shd:
+      root: shd
+
+  # SHD only ships train/test splits; the "test" split is used as the
+  # validation set.  No separate held-out test set exists.
+  valid:
+    name: ${data.name}
+    shd:
+      root: shd
+
+  test:
+    name: ${data.name}
+    shd:
+      root: shd
+
+  dataloader:
+    batch_size: 256
+    shuffle: true
+    num_workers: 4
+    pin_memory: false
+    prefetch_factor: 2
+    collate_fn: PadSequenceCollateFn
+
+  data_augment: null
+
+loss:
+  name: SpikingCELoss
+  time_reduce: sum         # sum the per-time-step spike counts (paper's loss='sum')
+  label_smoothing: 0.0
+
+# pytorch-lightning trainer
+trainer:
+  max_epochs: 500
+  gradient_clip_val: 5.0
+  log_every_n_steps: 100
+  strategy: ddp_find_unused_parameters_true   # ddp or ddp_find_unused_parameters_true
+  sync_batchnorm: true
+  precision: 32
+  benchmark: true
+
+trainer_callbacks:
+  model_checkpoint:
+    monitor: valid/acc
+    mode: max
+    save_top_k: 3
+    save_last: true
+    auto_insert_metric_name: false
+    filename: "epoch={epoch:03d}-step={step}-val_acc={valid/acc:.4f}"
+  progress_logger: true
+  # early_stop:
+  #   monitor: valid/acc
+  #   mode: max
+  #   patience: 30
+  #   verbose: true
+
+optimizer:
+  name: AdamW
+  lr: 0.01
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+
+lr_scheduler:
+  name: CosineAnnealingLR
+  T_max: 500
+  eta_min: 1.0e-5
+
+# Minimal STFT block required by BaseModule.  Not used by SpikeASR.
+stft:
+  n_fft: 512
+  win_length: 400
+  hop_length: 160
+  window: hann
+  center: true
+  normalized: false
+  onesided: true
+  power: null
+
+# Worker pool required by BaseModule.
+pool:
+  max_workers: 4

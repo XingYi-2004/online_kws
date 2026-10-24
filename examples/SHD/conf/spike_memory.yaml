@@ -1,0 +1,193 @@
+# MultiTauLIFCommander experiment on the SHD dataset.
+#
+# This config reuses the existing SpikeDataset + MultiTauSpikeASR training path from
+# shd_baseline.yaml, but replaces SpikeCommander's attention backbone with the
+# lightweight multi-tau LIF memory model.
+
+name: shd
+version: -spike-memory
+
+system:
+  name: MultiTauSpikeASR
+  exp_name: MultiTauLIFCommander
+  debug: false
+  seed: 312
+  log_dir: exp/logs
+  train_and_test: true
+
+model:
+  name: MultiTauLIFCommander
+  mask: false
+  debug: ${system.debug}
+  param:
+    # ---- general ----
+    debug: ${system.debug}
+    dataset: shd
+
+    # ---- spiking neuron ----
+    spike_mode: lif
+    init_tau: 2.0
+    v_threshold: 1.0
+    surrogate: atan
+    surrogate_alpha: 2.0
+    alpha: ${model.param.surrogate_alpha}
+    detach_reset: true
+    decay_input: true
+    backend: cupy
+
+    # ---- dataset / model shape ----
+    n_inputs: 140
+    n_hidden_neurons: 256
+    n_outputs: 20
+    depths: 1
+
+    # ---- multi-tau memory ----
+    taus: [2.0, 4.0, 8.0]
+    learnable_alpha: true
+    memory_mode: soft
+
+    # ---- frontend ----
+    frontend_type: see_lite
+    frontend_kernel_size: 7
+    frontend_dilation: 1
+    frontend_pw_bias: true
+    frontend_dw_bias: false
+
+    # ---- readout ----
+    # channel_mixer_type options:
+    #   linear: full per-frame Linear(D, D); uses only channel_mixer_bias.
+    #   light-conv: grouped 1x1 Conv1d + channel shuffle; uses channel_mixer_groups
+    #     and channel_mixer_light_bias.
+    #   conv: bottleneck temporal Conv1d mixer; uses channel_mixer_bottleneck_ratio,
+    #     channel_mixer_kernel_size, channel_mixer_dilation, and channel_mixer_norm_groups.
+    #   none: disables the channel mixer; all channel_mixer_* options are ignored.
+    channel_mixer_type: conv
+
+    # linear only
+    channel_mixer_bias: true
+
+    # light-conv only
+    channel_mixer_groups: 4
+    channel_mixer_light_bias: false
+
+    # conv only
+    channel_mixer_bottleneck_ratio: 4
+    channel_mixer_kernel_size: 5
+    channel_mixer_dilation: 1
+    channel_mixer_norm_groups: 8
+    return_sequence_logits: true
+    head_bias: false
+
+    # ---- dropout / regularization ----
+    norm_type: bn
+    use_dp: true
+    dropout_l: 0.25
+
+data:
+  name: SpikeDataset
+  data_dir: data
+  dataset_type: map
+
+  sample_rate: 16000
+  use_spike_input: true
+  valid_batch_size: ${data.dataloader.batch_size}
+  test_batch_size: ${data.dataloader.batch_size}
+
+  spike:
+    name: shd
+
+  shd:
+    n_bins: 5
+    data_type: frame
+    time_step: 10
+    use_aug: true
+    TN_mask_aug_proba: 0.5
+    time_mask_proportion: 0.2
+    neuron_mask_size: 20
+
+  train:
+    name: ${data.name}
+    shd:
+      root: shd
+
+  # SHD only ships train/test splits; the "test" split is used as the
+  # validation set. No separate held-out test set exists.
+  valid:
+    name: ${data.name}
+    shd:
+      root: shd
+
+  test:
+    name: ${data.name}
+    shd:
+      root: shd
+
+  dataloader:
+    batch_size: 256
+    shuffle: true
+    num_workers: 4
+    pin_memory: false
+    prefetch_factor: 2
+    collate_fn: PadSequenceCollateFn
+
+  data_augment: null
+
+loss:
+  name: SpikingCELoss
+  time_reduce: sum
+  label_smoothing: 0.0
+  # HybridTETLoss options:
+  # name: HybridTETLoss
+  # seq_reduce: mean  # sum matches SpikingCELoss time_reduce=sum; mean uses masked raw-logit average.
+  # tet_weight: 0.2
+
+trainer:
+  max_epochs: 300
+  gradient_clip_val: 5.0
+  log_every_n_steps: 300
+  strategy: ddp_find_unused_parameters_true
+  sync_batchnorm: true
+  precision: 32
+  benchmark: true
+
+trainer_callbacks:
+  model_checkpoint:
+    monitor: valid/acc
+    mode: max
+    save_top_k: 3
+    save_last: true
+    auto_insert_metric_name: false
+    filename: "epoch={epoch:03d}-step={step}-val_acc={valid/acc:.4f}"
+  progress_logger:
+    log_every_n_steps: 1000000  # larger than num_training_batches; disables per-batch text logs
+    log_every_n_epochs: 1       # keep one epoch summary per epoch
+
+optimizer:
+  name: AdamW
+  lr: 0.002
+  weight_decay: 0.015
+  betas: [0.9, 0.999]
+  # ema:
+  #   decay: 0.9999
+  # lr_scheduler:
+  #   name: CosineAnnealingLR
+  #   T_max: 300
+  #   eta_min: 1.0e-05
+  lr_scheduler:
+    name: WarmupCosineScheduler
+    warmup_epochs: 30
+    max_epochs: 300
+    min_lr: 1.0e-5
+
+stft:
+  n_fft: 256
+  win_length: 256
+  hop_length: 80
+  window: hann
+  center: true
+  normalized: false
+  onesided: true
+  power: null
+
+pool:
+  max_workers: 4

@@ -1,0 +1,130 @@
+# speech enhancement
+name: aispeech
+version: -5a
+
+system:
+  name: DualSE
+  exp_name: ${system.name}
+  debug: false
+  seed: 0
+  log_dir: exp/logs
+
+model:
+  name: DNet
+  param: DNet_6_64
+  mask: true
+  debug: ${system.debug}
+
+data:
+  name: WavDataset # default dataset class
+  pairs: noisy2clean # [noisy2clean, noisy2noisy, noisier2noisy]
+  data_dir: data
+  sample_rate: 16000
+  chunk_size: 249
+  filter: 0.99 # Keep the data of the middle 99%, or with lower_bound and upper_bound
+  train:
+    name: OnlineNoisyDataset
+    noisy_store: null
+    noisy_csv: null
+    clean_csv: BigData/32w/train_clean.csv
+    split_wav: true
+    filter: ${data.filter}
+    base_dir: /public/share/kaitao_mu/sharedata/aispeech/codes/atec/proj/exp_NS_EXPERIMENTS/common-32w-WeiJie/tr/clean_shuf/
+  valid:
+    name: ${data.name}
+    noisy_store: valid/aispeech_noisy.flac.hdf5
+    noisy_csv: valid/aispeech.csv
+    clean_store: valid/aispeech_clean.flac.hdf5
+    clean_csv: valid/aispeech.csv
+    split_wav: false
+  test:
+    name: ${data.name}
+    noisy_store: test/cn_fan_Midea-XiDun.flac.hdf5
+    noisy_csv: test/cn_fan_Midea-XiDun.csv
+    clean_store: null
+    clean_csv: null
+    split_wav: false
+  noise_store: noise/aispeech.flac.hdf5
+  noise_csv: noise/aispeech.csv # "wav_id,wav_path,duration"
+  rir_store: rir/rir.wav.hdf5
+  rir_csv: rir/rir.csv # "wav_id,wav_path,duration"
+  add_rir: 0
+  mix_param:
+    sr: ${data.sample_rate}
+    snr_lower: -10
+    snr_upper: 10
+    randomize_snr: true
+    target_level_lower: -35
+    target_level_upper: -15
+    fs: ${data.sample_rate}
+    audio_length: 30
+    silence_length: 0.2
+    clean_activity_threshold: 0.6
+    noise_activity_threshold: 0.0
+    is_test_set: false
+    lower_t60: 0.3
+    upper_t60: 1.3
+  dataloader:
+    batch_size: 17
+    shuffle: true
+    num_workers: 8
+    pin_memory: true
+    prefetch_factor: 16
+    persistent_workers: true
+    collate_fn: AudioCollateFn
+  valid_batch_size: 1
+  data_augment: # null
+    remix: false
+    bandmask:
+      maxwidth: 0.2
+    shift: false
+    revecho: false
+
+loss:
+  name: HybridLoss
+
+# pytorch-lightning trainer
+trainer:
+  max_epochs: 50
+  gradient_clip_val: 5.0
+  log_every_n_steps: 100
+  val_check_interval: 0.5
+  strategy: ddp_find_unused_parameters_true # ddp or ddp_find_unused_parameters_true
+
+trainer_callbacks:
+  model_checkpoint:
+    monitor: valid_loss
+    mode: min
+    save_top_k: 3
+    save_last: true
+  early_stop:
+    monitor: ${trainer_callbacks.model_checkpoint.monitor}
+    mode: ${trainer_callbacks.model_checkpoint.mode}
+    patience: 7
+    verbose: true
+optimizer:
+  name: AdamW
+  lr: 1e-3
+  lr_scheduler:
+    name: ReduceLROnPlateau
+    factor: 0.5
+    patience: 3
+
+stft:
+  name: torch # torch or filterbank
+  n_fft: 512
+  win_length: 512
+  hop_length: 256
+
+# ===== others =====
+pool:
+  name: ThreadPoolExecutor
+  max_workers: null
+
+deepfilter:
+  n_filter_f: 3 # frequency
+  n_filter_t: 5 # time
+  n_filter_c: 16 # channel
+  complex: false
+  expand: SPConv
+  method: filtering # masking, filtering

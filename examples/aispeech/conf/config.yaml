@@ -1,0 +1,9 @@
+name: aispeech
+version: -5a
+
+system:
+  name: DualSE
+  exp_name: ${system.name}
+  debug: false
+  seed: 0
+  log_dir: exp/logs

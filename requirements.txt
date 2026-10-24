@@ -1,0 +1,46 @@
+# 核心依赖
+numpy==1.26.4
+
+#Pytorch相关
+pytorch-lightning==2.2.5
+mkl==2024.0
+ 
+# 音频处理
+librosa==0.10.2
+
+# ONNX 运行时
+onnxruntime-gpu==1.15.0
+
+# HDF5 文件支持
+h5py==3.11
+
+# SNN 必备环境依赖
+spikingjelly==0.0.0.0.14
+cupy-cuda12x==13.0.0
+triton==3.1.0
+
+# 其他常用库
+ipython
+pandas
+matplotlib
+omegaconf
+rich
+pytest
+seaborn
+asteroid_filterbanks
+pystoi
+nvitop
+thop
+tensorboard
+einops
+loguru
+editdistance
+joblib
+pesq
+kaldiio
+matcha-tts
+torchtyping
+torch_ema
+ninja
+whisper
+

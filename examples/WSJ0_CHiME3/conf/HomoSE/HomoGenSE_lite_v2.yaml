@@ -1,0 +1,151 @@
+name: WSJ0_CHiME3
+version: -4a
+
+system:
+  name: HomoGenSE
+  exp_name: ${system.name}
+  debug: false
+  seed: 0
+  log_dir: exp/logs
+  train_and_test: true
+  valid_metric: true
+
+model:
+  name: MIMOLiteNet
+  param: LiteNet_10_32
+  rnn:
+    width: 27
+  excit_data: true
+  phase_data: true
+  flow_loss_w: 1e-6
+  mask: true
+  decoder_list: [{"mask": true, "bound": "sigmoid", "out_channels": 1}, 
+                 {"mask": true, "bound": "sigmoid", "out_channels": 1},
+                 {"mask": true, "bound": "sigmoid", "out_channels": 1}]
+  ema_decay: 0.999
+  ema_name: gen_model
+  gen_model:
+    name: DiffAdaptNet
+    backbone: NCSNppTiny
+    complex: false
+    ode_param:
+      sigma_min: 0
+      sigma_max: 0.5
+      T_rev: 1.0
+      t_eps: 0.03
+      n_timesteps: 1
+    param:
+      num_heads: 4
+      act_fn: snakebeta
+    pad_value: noisy # 0, 1, noisy
+  debug: ${system.debug}
+
+data:
+  name: WavDataset # default dataset class
+  pairs: noisy2clean # [noisy2clean, noisy2noisy, noisier2noisy]
+  data_dir: data
+  sample_rate: 16000
+  chunk_size: 252 # frames feed to network, 124: 2s, 374: 6s
+  # normalize: true
+  subset: H # H, L, R
+  train:
+    name: WavDataset # OnlineNoisyDataset
+    noisy_store: noisy.wav.hdf5
+    noisy_csv: train/noisy_wav_${data.subset}.csv
+    clean_store: clean.wav.hdf5
+    clean_csv: train/clean_wav_${data.subset}.csv
+    split_wav: true
+  valid:
+    name: ${data.name}
+    noisy_store: ${data.train.noisy_store}
+    noisy_csv: valid/noisy_wav_${data.subset}.csv
+    clean_store: ${data.train.clean_store}
+    clean_csv: valid/clean_wav_${data.subset}.csv
+    split_wav: false
+  test:
+    name: ${data.name}
+    noisy_store: ${data.train.noisy_store}
+    noisy_csv: test/noisy_wav_${data.subset}.csv
+    clean_store: ${data.train.clean_store}
+    clean_csv: test/clean_wav_${data.subset}.csv
+    split_wav: false
+  dataloader:
+    batch_size: 8
+    shuffle: true
+    num_workers: 8
+    pin_memory: false
+    prefetch_factor: 4
+  data_augment: null
+    # remix: false
+    # bandmask:
+    #   maxwidth: 0.2
+    # shift: false
+    # revecho: false
+
+loss:
+  name: FusionLoss
+  phase_weight: 0.03
+  pesq_weight: 0.02
+
+# pytorch-lightning trainer
+trainer:
+  max_epochs: 200
+  gradient_clip_val: 5.0
+  log_every_n_steps: 100
+  check_val_every_n_epoch: 2
+  strategy: ddp_find_unused_parameters_true # ddp or ddp_find_unused_parameters_true
+
+trainer_callbacks:
+  model_checkpoint:
+    monitor: valid_loss
+    mode: min
+    save_top_k: 3
+    save_last: true
+  early_stop: # null
+    monitor: ${trainer_callbacks.model_checkpoint.monitor}
+    mode: ${trainer_callbacks.model_checkpoint.mode}
+    patience: 13
+    verbose: true
+
+optimizer:
+  name: Adam
+  lr: 1e-4
+  frequency: ${trainer.check_val_every_n_epoch}
+  lr_scheduler: # null
+    name: ReduceLROnPlateau
+    factor: 0.5
+    patience: 6
+    # name: WarmupCosineScheduler
+    # warmup_epochs: 5
+    # min_lr: 1e-5
+    # max_epochs: ${trainer.max_epochs}
+
+stft:
+  name: torch # torch or filterbank
+  n_fft: 512
+  win_length: 400
+  hop_length: 100
+  # mag_compress: 0.5
+  # spec_factor: 0.15
+
+homo:
+  n_fft: ${stft.n_fft}
+  win_length: ${stft.win_length}
+  hop_length: ${stft.hop_length}
+  n_ceps: 27
+  type: real # complex or real
+  lifter_type: module
+  name: RealCepstrum
+
+# ===== others =====
+pool:
+  name: ThreadPoolExecutor
+  max_workers: null
+
+deepfilter:
+  n_filter_f: 3 # frequency, 3
+  n_filter_t: 5 # time, 5
+  n_filter_c: 16 # channel, 16
+  complex: false
+  expand: SPConv
+  method: filtering # masking, filtering
