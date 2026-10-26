@@ -24,9 +24,16 @@ from alpha.asr.kws.utils.train_utils import batch_lengths as _batch_lengths
 
 
 def _set_adaptation_parameters(
-    model: nn.Module, bn_mode: str, update_scope: str
+    model: nn.Module,
+    bn_mode: str,
+    update_scope: str,
+    selected_layers: Optional[list[str]] = None,
 ) -> list[nn.Parameter]:
-    """Freeze MT-SNN and enable the configured AdaKWS update scope."""
+    """Freeze MT-SNN and enable the configured AdaKWS update scope.
+
+    selected_layers: 名称前缀列表（如 ["frontend"]、["blocks.3", "blocks.4"]），
+    只解锁名称精确匹配或以 "前缀." 开头的归一化层；空/None 表示全部（原行为）。
+    """
     valid_bn_modes = {"no_running", "train_running", "checkpoint_running"}
     if bn_mode not in valid_bn_modes:
         raise ValueError(
@@ -57,12 +64,19 @@ def _set_adaptation_parameters(
         norm_types = (nn.modules.batchnorm._BatchNorm,)
         if update_scope == "bn_gn_affine":
             norm_types = (nn.modules.batchnorm._BatchNorm, nn.GroupNorm)
-        for module in core.modules():
-            if isinstance(module, norm_types):
-                if module.weight is not None:
-                    module.weight.requires_grad = True
-                if module.bias is not None:
-                    module.bias.requires_grad = True
+        patterns = [str(p) for p in (selected_layers or [])]
+        for name, module in core.named_modules():
+            if not isinstance(module, norm_types):
+                continue
+            if patterns and not any(
+                name == pattern or name.startswith(pattern + ".")
+                for pattern in patterns
+            ):
+                continue
+            if module.weight is not None:
+                module.weight.requires_grad = True
+            if module.bias is not None:
+                module.bias.requires_grad = True
 
     if update_scope in {"bn_classifier", "last_block_classifier"}:
         for parameter in core.classifier.parameters():
@@ -206,9 +220,14 @@ def train_adakws(
         bn_mode = str(configured_bn_mode).lower()
     update_scope = str(getattr(cfg, "adakws_update_scope", "bn_affine")).lower()
 
-    trainable = _set_adaptation_parameters(model, bn_mode, update_scope)
+    selected_layers = [str(p) for p in (getattr(cfg, "adakws_bn_layers", None) or [])]
+    trainable = _set_adaptation_parameters(model, bn_mode, update_scope, selected_layers)
     if not trainable:
-        raise RuntimeError("AdaKWS requires at least one BatchNorm affine parameter")
+        raise RuntimeError(
+            f"AdaKWS requires at least one BatchNorm affine parameter"
+            f"（adakws_bn_layers={selected_layers} 未匹配到任何归一化层，"
+            f"可用前缀示例: frontend, blocks.0 ~ blocks.4）"
+        )
 
     optimizer_name = str(getattr(cfg, "adakws_optimizer", "sgd")).lower()
     optimizer_kwargs = {
@@ -229,9 +248,10 @@ def train_adakws(
             f"不支持的 adakws_optimizer={optimizer_name!r}，可选值为 'sgd' 或 'adam'"
         )
     logging.info(
-        "开始 AdaKWS 在线适应：更新范围=%s，共 %d 个参数；"
+        "开始 AdaKWS 在线适应：更新范围=%s，选择层=%s，共 %d 个参数；"
         "目标域标签不参与适应；优化器=%s；BN统计模式=%s",
         update_scope,
+        selected_layers if selected_layers else "全部",
         sum(parameter.numel() for parameter in trainable),
         optimizer_name,
         bn_mode,

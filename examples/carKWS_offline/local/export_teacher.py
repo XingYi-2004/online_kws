@@ -1,8 +1,10 @@
 """ANN 教师 epoch 平均导出 + 评测（对应原版 decode_ann --epoch 17 --avg 9 --export True）。
 
-对 save_top_k: -1 全量保存的 Lightning 逐 epoch checkpoint 做权重平均，
-输出 {"model": ...}（裸键），可直接作为离线 SNN KD 的教师
-（conf: system.kd.teacher=<输出路径>）。导出后自动在干净测试集上评测精度。
+对 save_top_k: -1 全量保存的 Lightning 逐 epoch checkpoint 做权重平均。
+输出默认放回被平均的 checkpoints 目录（与原版 pretrained.pt 存于训练目录一致）：
+  --ckpt-dir exp/logs/carKWS_ANN/ann01/checkpoints
+  → exp/logs/carKWS_ANN/ann01/checkpoints/pretrained.pt（--out 可覆盖）
+导出后自动在干净测试集上评测精度。
 
 评测口径（TdnnLstm 无掩码全帧均值池化，精度对批组成/padding 敏感，勿改）：
   lhotse DynamicBucketingSampler, max_duration=200s, num_buckets=30,
@@ -11,11 +13,12 @@
 用法（cd AlphaSNN）：
   python examples/carKWS_offline/local/export_teacher.py \
       --ckpt-dir exp/logs/carKWS_ANN/ann01/checkpoints \
-      --start-epoch 9 --end-epoch 17 --out kd_teacher/pretrained_ft.pt
+      --start-epoch 9 --end-epoch 17
+  # → exp/logs/carKWS_ANN/ann01/checkpoints/pretrained.pt
   python examples/carKWS_offline/local/export_teacher.py --eval-only \
-      --out kd_teacher/pretrained_ft.pt          # 复测已有平均权重
+      --out exp/logs/carKWS_ANN/ann01/checkpoints/pretrained.pt   # 复测已有平均权重
 
-期望：平均教师 Test acc ≈99.7%（明显偏低请先排查再开 300 epoch 蒸馏）。
+期望：平均教师 Test acc ≈99.7%。
 （学生 SNN 权重无需导出：在线/评测加载器直接读 Lightning best-acc.ckpt /
  best-ema.ckpt，见 kws/utils/train_utils.load_pretrained_model）
 """
@@ -90,19 +93,25 @@ def main():
     parser.add_argument('--ckpt-dir', default=None, help='checkpoints 目录')
     parser.add_argument('--start-epoch', type=int, default=9)
     parser.add_argument('--end-epoch', type=int, default=17)
-    parser.add_argument('--out', default='kd_teacher/pretrained_ft.pt')
+    parser.add_argument('--out', default=None,
+                        help='输出路径（默认 <ckpt-dir>/pretrained.pt，'
+                             '与被平均权重同目录）')
     parser.add_argument('--eval-only', action='store_true',
                         help='跳过平均，直接评测 --out 指向的已有平均权重')
     args = parser.parse_args()
-    out_path = Path(args.out)
 
     if args.eval_only:
+        out_path = Path(args.out) if args.out else None
+        if out_path is None:
+            parser.error('--eval-only 需要 --out 指向已有平均权重')
         ckpt = torch.load(out_path, map_location='cpu', weights_only=True)
         avg = ckpt['model'] if 'model' in ckpt else ckpt
     else:
         if not args.ckpt_dir:
             parser.error('平均模式需要 --ckpt-dir（或用 --eval-only 评测已有权重）')
-        avg = average_epochs(Path(args.ckpt_dir), args.start_epoch, args.end_epoch)
+        ckpt_dir = Path(args.ckpt_dir)
+        out_path = Path(args.out) if args.out else ckpt_dir / 'pretrained.pt'
+        avg = average_epochs(ckpt_dir, args.start_epoch, args.end_epoch)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         torch.save({'model': avg}, out_path)
         print(f'[export] teacher avg epoch {args.start_epoch}-{args.end_epoch}: '
@@ -120,8 +129,7 @@ def main():
     cuts = build_eval_loader(MANIFEST_DIR, CUTS_FILE, MAX_DURATION,
                              num_buckets=NUM_BUCKETS, num_workers=4)
     correct, total = evaluate_teacher(model, cuts, device)
-    print(f'[teacher] Test acc = {correct / total:.2%} ({correct}/{total} cuts) '
-          f'← 期望 ≈99.7%，明显偏低请先排查再开蒸馏')
+    print(f'[teacher] Test acc = {correct / total:.2%} ({correct}/{total} cuts)')
 
 
 if __name__ == '__main__':

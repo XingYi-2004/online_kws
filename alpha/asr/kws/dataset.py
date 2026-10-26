@@ -88,19 +88,20 @@ def build_eval_loader(manifest_dir, cuts_file: str, max_duration: float,
 
 
 def build_adakws_dataloader(cuts: CutSet, cfg_target, batch_size: int) -> DataLoader:
-    """AdaKWS 目标域 loader：固定每批条数 + 按时长升序（统一评测口径）。
+    """AdaKWS 目标域 loader：固定每批条数（统一评测口径）。
 
-    与原 utils/data.py 同语义：SimpleCutSampler、顺序固定，保证初始/最终
-    精度出自完全一致的批次划分。
+    cfg_target.shuffle=true 时批次组成随机打乱（论文协议，batch 大小仍固定）；
+    默认 False 保持原行为（按时长升序、顺序固定，初始/最终精度同批可比）。
     """
     if batch_size < 1:
-        raise ValueError(f'AdaKWS batch_size must be positive, got {batch_size}')
-    dataset = _make_dataset(on_the_fly=bool(getattr(cfg_target, 'on_the_fly_feats', False)))
+        raise ValueError(f"AdaKWS batch_size must be positive, got {batch_size}")
+    shuffle = bool(getattr(cfg_target, "shuffle", False))
+    dataset = _make_dataset(on_the_fly=bool(getattr(cfg_target, "on_the_fly_feats", False)))
     sampler = SimpleCutSampler(
-        cuts.sort_by_duration(ascending=True),
+        cuts if shuffle else cuts.sort_by_duration(ascending=True),
         max_duration=None,
         max_cuts=batch_size,
-        shuffle=False,
+        shuffle=shuffle,
         drop_last=False,
     )
     return DataLoader(

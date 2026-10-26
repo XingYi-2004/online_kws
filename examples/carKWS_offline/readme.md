@@ -40,13 +40,14 @@ python -m modules.launch cmd=train conf=examples/carKWS_offline/conf/ann_teacher
 | 损失 | CrossEntropy |
 
 产物：`exp/logs/carKWS_ANN/ann01/`（log.log + hparams.yaml + tensorboard + checkpoints/epoch={0..19}.ckpt + best_k_models.yaml）。
-教师导出 + 自动评测（对应原版 decode_ann --epoch 17 --avg 9 --export；导出后自动报告平均教师测试精度，期望 ≈99.7%，明显偏低先排查再开蒸馏）：
+教师导出 + 自动评测（对应原版 decode_ann --epoch 17 --avg 9 --export；**输出放回被平均的 checkpoints 目录**，导出后自动报告平均教师测试精度，期望 ≈99.7%，明显偏低先排查再开蒸馏）：
 
 ```bash
 python examples/carKWS_offline/local/export_teacher.py \
     --ckpt-dir exp/logs/carKWS_ANN/ann01/checkpoints \
-    --start-epoch 9 --end-epoch 17 --out kd_teacher/pretrained_ft.pt
-# 复测已有平均权重：加 --eval-only
+    --start-epoch 9 --end-epoch 17
+# → exp/logs/carKWS_ANN/ann01/checkpoints/pretrained.pt
+# 复测已有平均权重：加 --eval-only --out <该文件>
 ```
 
 ## 2. SNN 知识蒸馏

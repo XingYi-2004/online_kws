@@ -250,6 +250,35 @@ class MultiTauKwsKd(LhotseKwsMixin, MultiTauSpikeASR):
                      sync_dist=True, batch_size=batch['inputs'].shape[0])
         return loss
 
+    def _classification_step(self, split, batch):
+        """覆盖框架 tuple 版本（SpikeASR._classification_step 写死 batch[1]，
+        lhotse dict 批次为 batch['inputs']）。日志键与框架一致，
+        并保留 MultiTauSpikeASR 的 branch_balance 叠加。"""
+        asr_loss, loss_info = self.forward(batch)
+        loss_stat = self.loss.log_stat(loss_info)
+        batch_size = batch['inputs'].shape[0]
+        loss_log_kwargs = {'on_step': split == 'train', 'on_epoch': True,
+                           'sync_dist': True, 'batch_size': batch_size}
+        metric_log_kwargs = {'on_step': False, 'on_epoch': True,
+                             'sync_dist': True, 'batch_size': batch_size}
+        self.log(f'{split}/asr_loss', asr_loss, **loss_log_kwargs)
+        self.log(f'{split}/loss_per', loss_stat['loss'], **loss_log_kwargs)
+        self.log(f'{split}/acc', loss_info['token_acc'], prog_bar=True,
+                 **metric_log_kwargs)
+        if split != 'train':
+            return asr_loss
+        branch_balance_loss = self.model.branch_balance_loss()
+        self.log('train/branch_balance_loss', branch_balance_loss,
+                 on_step=True, on_epoch=True, sync_dist=True,
+                 batch_size=batch_size)
+        return asr_loss + self.branch_balance_weight * branch_balance_loss
+
+    def on_test_batch_end(self, outputs, batch, batch_idx, dataloader_idx=0):
+        """覆盖框架 tuple 版本（batch[1] → dict），保留计数与膜电位复位。"""
+        self.test_batches_seen += 1
+        self.test_samples_seen += batch['inputs'].shape[0]
+        functional.reset_net(self.model)
+
     # ---- 双通道验证：raw 与 EMA 各评一次（覆盖 BaseModule 的整体 EMA 交换）----
 
     def on_validation_start(self):

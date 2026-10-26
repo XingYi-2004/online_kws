@@ -19,7 +19,7 @@ system:
   #   ├── tensorboard/       （system.tensorboard: true 时）
   #   └── checkpoints/       init-model.pt / best-adakws.pt
   exp_name: carKWS_online
-  version: online01
+  version: online09                # 恢复时长排序确定性批（online05/06 为随机批实验；online01-03 冠军配置）
   log_filename: log.log
   cuda_visible_devices: "0"
   world_size: 1                # 单卡训练
@@ -102,7 +102,7 @@ model:
   # ---- 正则化 ----
   norm_type: bn                # 归一化类型（bn: BatchNorm / ln: LayerNorm / none）
   use_dp: true                 # 启用 Dropout
-  dropout_l: 0.2               # Dropout 丢弃比例
+  dropout_l: 0.2              # Dropout 丢弃比例
 
   # ---- 输入降采样（time-domain）----
   subsampling_factor: 2        # AvgPool1d 步长（对齐预训练 checkpoint）
@@ -121,31 +121,42 @@ data:
     cuts_file: command_cuts_test_29_no_rir.jsonl    # 目标域 cuts 清单
     on_the_fly_feats: false                  # false=用预计算特征
     test_num_workers: 8                      # 评测/适应 dataloader 进程数
+    shuffle: false                           # 恢复按时长排序的确定性批次（改 true 可切回随机批）
 
 
 # ═══════════════════════════════════════════════════════════════
 #  在线学习（AdaKWS）
+#  ⚠️ 当前为【论文原始配置对照实验】（来源：github.com/dhyzy123/ImKWS
+#     kwstta/main.py setup_adakws + argparse 默认值、kwstta/adakws.py __init__）。
+#     本项目冠军配置为：adam / lr 2.2e-3 / wd 0 / ent 0.3 / train_running /
+#     10 轮 / 遮罩 20帧×2 / 5带×2 —— 回滚时按此恢复。
 # ═══════════════════════════════════════════════════════════════
 online:
   method: adakws               # 仅支持 adakws（历史方法已清理）
-  num_iterations: 10
-  grad_clip: 5.0               # 梯度裁剪阈值
+  num_iterations: 1            # 论文为单遍测试流适应（冠军配置：10）
+  grad_clip: 5.0               # 梯度裁剪阈值（论文无裁剪；此配置下几乎不触发）
 
   # ---- AdaKWS 参数 ----
-  adakws_batch_size: 128
-  adakws_steps: 1
-  adakws_entropy_threshold: 0.3  # ⚠️ 90.20% 冠军值（2026-10-19 运行日志核对）；0.4 曾跑出 88.42%
-  adakws_pkc_threshold: 0.05
-  adakws_sigma: 0.5              # 样本权重归一化因子
-  adakws_temperature: 1.0        # 熵计算温度
-  adakws_optimizer: adam         # sgd / adam
-  adakws_lr: 2.2e-3
-  adakws_momentum: 0.9           # SGD momentum
-  adakws_nesterov: true          # SGD Nesterov 加速
-  adakws_weight_decay: 0.0
-  adakws_bn_mode: train_running  # no_running / train_running / checkpoint_running
-  adakws_update_scope: bn_affine # 更新范围：bn_affine / bn_gn_affine / bn_classifier / last_block_classifier
-  adakws_time_mask: 20           # 时域遮罩最大宽度（帧）
-  adakws_freq_mask: 5            # 频域遮罩最大宽度（频带）
-  adakws_num_time_masks: 2
-  adakws_num_freq_masks: 2
+  adakws_batch_size: 64       
+  adakws_steps: 1              # 每个 batch 适应 1 次（论文同款）
+  adakws_entropy_threshold: 0.3  # 论文值 deyo_margin=0.4（冠军配置：0.3）
+  adakws_pkc_threshold: 0.03   
+  adakws_sigma: 0.5            # 论文同款 margin_e0=0.5
+  adakws_temperature: 1.0      # 熵计算温度
+  adakws_optimizer: sgd        # 论文：SGD（冠军配置：adam）
+  adakws_lr: 3e-3            # 论文默认（冠军配置：2.2e-3）
+  adakws_momentum: 0.9         # SGD momentum（论文同款）
+  adakws_nesterov: true        # SGD Nesterov（论文同款）
+  adakws_weight_decay: 1.0e-7  # 论文 setup_adakws 硬编码值（冠军配置：0）
+  adakws_bn_mode: train_running   # 论文：丢弃 running stats、用 batch 统计（冠军配置：train_running）
+  adakws_update_scope: bn_gn_affine # 更新范围：全部 BN 仿射参数（论文同思路）
+  adakws_bn_layers: []           # 选择性更新（空=全部6层BN，原行为）。前缀匹配示例：
+                                 #   ["frontend"]                    → 只更入口归一化 (768)
+                                 #   ["blocks.4"]                    → 只更最后一个 block (768)
+                                 #   ["blocks.3", "blocks.4"]        → 深层两块 (1536)
+                                 #   ["blocks.2", "blocks.3", "blocks.4"] → 后半段 (2304)
+                                 #   ["blocks.4.channel_mixer"]      → 该块的3个GroupNorm（配合 bn_gn_affine）
+  adakws_time_mask: 15         # 论文：时域遮罩最大宽度 20 帧（冠军配置：15）
+  adakws_freq_mask: 5          # 论文同款：频域遮罩最大宽度 5
+  adakws_num_time_masks: 1     # 论文：时域遮罩 2 个（冠军配置：1）
+  adakws_num_freq_masks: 1    # 论文：频域遮罩 2 个（冠军配置：1）

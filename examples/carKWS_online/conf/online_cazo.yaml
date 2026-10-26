@@ -1,0 +1,128 @@
+# ============================================================================
+# 在线学习（CAZO 测试时适应）训练配置
+# ============================================================================
+# 移植 CAZO（CVPR 2026, github.com/Hollyming/CAZO）的曲率感知零阶优化机制，
+# 适应对象 = 归一化层 affine（cazo_param_scope 可选 bn_affine / bn_gn_affine，
+# 默认 bn_gn_affine=10368 参数，与 AdaKWS 90.10% 冠军配置同参同起点）
+# ——纯前向零反传，BN 全程 eval（checkpoint running stats）。
+# 启动命令：
+#   cd AlphaSNN && python examples/carKWS_online/local/train_cazo.py
+#
+# 相对路径解析基准：exp_dir 以 alpha/asr/kws/online/ 为基准，
+# pretrained_model / manifest_dir 以项目根 AlphaSNN 为基准。
+# ============================================================================
+
+# ═══════════════════════════════════════════════════════════════
+#  系统设置
+# ═══════════════════════════════════════════════════════════════
+system:
+  # 产物目录：exp/logs/carKWS_online/<version>/
+  #   └── checkpoints/       init-model.pt / best-cazo.pt
+  exp_name: carKWS_online_cazo
+  version: cazo04                 # cazo03：BN affine(4608)+lr0.01+bs128 → 88.14（+1.12pp，为反传增益的85%）
+                                  # cazo04：对齐 AdaKWS 90.10% 冠军口径——scope=bn_gn_affine(10368) + lr0.05 + bs64
+  log_filename: log.log
+  cuda_visible_devices: "0"
+  world_size: 1                   # 单卡训练
+  master_port: 12354              # DDP 主端口（world_size>1 时用）
+  seed: 42                        # 随机种子
+  log_interval: 10                # 每 N 个 batch 打印一次日志
+  tensorboard: false              # 是否启用 TensorBoard
+
+
+# ═══════════════════════════════════════════════════════════════
+#  路径（与 AdaKWS 基线同权重，保证增益归因干净）
+# ═══════════════════════════════════════════════════════════════
+paths:
+  pretrained_model: exp/logs/carKWS_SNN_KD/kd01/checkpoints/best-ema.ckpt
+  use_ema: true
+
+
+# ═══════════════════════════════════════════════════════════════
+#  模型架构（⚠️ 与 online_adakws.yaml / 预训练 checkpoint 一致，勿改）
+# ═══════════════════════════════════════════════════════════════
+model:
+  name: MultiTauLIFCommander
+
+  backend: cupy
+
+  spike_mode: lif
+  init_tau: 2.0
+  v_threshold: 1.0
+  surrogate: atan
+  surrogate_alpha: 2.0
+  detach_reset: true
+  decay_input: true
+
+  n_inputs: 80
+  n_hidden_neurons: 384
+  n_outputs: 29
+  depths: 5
+
+  taus: [5.0, 20.0, 100.0]
+  learnable_alpha: false
+  memory_mode: soft
+  branch_fusion_mode: channel_adaptive
+
+  frontend_type: see_lite
+  frontend_kernel_size: 7
+  frontend_dilation: 1
+  frontend_pw_bias: true
+  frontend_dw_bias: false
+
+  channel_mixer_type: conv
+
+  channel_mixer_bias: true
+
+  channel_mixer_groups: 4
+  channel_mixer_light_bias: false
+
+  channel_mixer_bottleneck_ratio: 4
+  channel_mixer_kernel_size: 5
+  channel_mixer_dilation: 1
+  channel_mixer_norm_groups: 8
+
+  return_sequence_logits: false
+  head_bias: false
+
+  norm_type: bn
+  use_dp: true
+  dropout_l: 0.2
+
+  subsampling_factor: 2
+
+
+# ═══════════════════════════════════════════════════════════════
+#  数据配置（与 AdaKWS 基线同口径：时长排序、确定性批）
+# ═══════════════════════════════════════════════════════════════
+data:
+  target:
+    manifest_dir: examples/carKWS_online/data
+    cuts_file: command_cuts_test_29_no_rir.jsonl
+    on_the_fly_feats: false
+    test_num_workers: 8
+    shuffle: false
+
+
+# ═══════════════════════════════════════════════════════════════
+#  CAZO 超参数
+#  来源：github.com/Hollyming/CAZO scripts/cazo.sh + tta_library/CAZO.py
+#  （k=20 / ε=0.1 / ν=0.8 / sgd / lr=0.01 同款；ZO 损失用批均值解耦批大小尺度；
+#   适应对象为归一化层 affine（bn_affine/bn_gn_affine）——原版 LoRA 支路路线
+#   cazo01/02 已验证不可行，见
+#   trainer 文档串历史说明）
+# ═══════════════════════════════════════════════════════════════
+online:
+  method: cazo                 # 本入口仅支持 cazo
+  num_iterations: 1            # 数据遍数（论文为流式单遍；>1 时按无监督评分保留最佳遍）
+
+  # ---- ZO 优化（作用于归一化层 affine）----
+  cazo_param_scope: bn_gn_affine  # bn_affine=4608(BN) | bn_gn_affine=10368(BN+GN，AdaKWS 90.10% 冠军口径)
+  cazo_k: 20                      # 每批扰动数（原论文同款；每批前向次数 = 2k+1 = 41）
+  cazo_epsilon: 0.1               # 扰动幅度 ε（原论文同款）
+  cazo_nu: 0.8                    # 对角 Hessian 估计 D 的衰减系数（原论文脚本值）
+  cazo_optimizer: sgd             # sgd | sgd_momentum（原论文同款 sgd）
+  cazo_lr: 0.05                   # 学习率（cazo03 的 0.01 偏保守，0.05≈0.5%/批更新量）
+  cazo_beta: 0.9                  # sgd_momentum 时的动量系数（原论文同款）
+  cazo_temperature: 1.0           # 熵计算温度
+  cazo_batch_size: 64             # 对齐 AdaKWS 90.10% 基线口径（初始精度应=0.8758）
